@@ -1,0 +1,15 @@
+User-agent: *
+Allow: /
+
+# Block access to admin areas
+Disallow: /api/
+Disallow: /admin/
+Disallow: /_next/
+
+# Allow crawling of static assets
+Allow: /_next/static/
+Allow: /favicon.ico
+Allow: /manifest.json
+
+# Sitemap
+Sitemap: https://campusflow.coventry.ac.uk/sitemap.xml

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+coverage/
+
+# Llama.cpp models (large files, download at runtime)
+llama-b7581-bin-win-cpu-x64/models/
+.vercel
