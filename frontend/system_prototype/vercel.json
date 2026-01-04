@@ -1,14 +1,6 @@
 {
   "rewrites": [
     {
-      "source": "/api/chats/:sessionId",
-      "destination": "https://studentassistant-production.up.railway.app/api/chats/:sessionId"
-    },
-    {
-      "source": "/api/chats",
-      "destination": "https://studentassistant-production.up.railway.app/api/chats"
-    },
-    {
       "source": "/api/chat/:path*",
       "destination": "https://studentassistant-production.up.railway.app/api/chat/:path*"
     },
