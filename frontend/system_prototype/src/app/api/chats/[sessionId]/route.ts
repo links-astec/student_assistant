@@ -23,13 +23,15 @@ export async function GET(
   { params }: { params: Promise<{ sessionId: string }> }
 ) {
   try {
+    console.log("[Chat API GET] Route handler called!");
     const { sessionId } = await params;
 
     if (!sessionId) {
+      console.error("[Chat API GET] No sessionId provided");
       return NextResponse.json({ error: "Session ID required" }, { status: 400 });
     }
 
-    console.log(`[Chat API] Fetching session ${sessionId}`);
+    console.log(`[Chat API GET] Fetching session ${sessionId}`);
     const supabase = createSupabaseClient();
 
     // First, try to get from chat_state
