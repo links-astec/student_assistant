@@ -7,13 +7,16 @@ const envSchema = z.object({
   PORT: z.string().default('3000'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   
-  // LLM Provider: "ollama" (free), "openai" (paid), or "llamacpp" (fastest)
-  LLM_PROVIDER: z.enum(['ollama', 'openai', 'llamacpp']).default('ollama'),
+  // LLM Provider: "groq" (free/fast), "ollama" (local), or "llamacpp" (fastest)
+  LLM_PROVIDER: z.enum(['groq', 'ollama', 'llamacpp']).default('groq'),
   
-  // Ollama Configuration (FREE - runs locally)
+  // Ollama Configuration (FREE - runs locally or via service)
   OLLAMA_BASE_URL: z.string().default('http://localhost:11434'),
   OLLAMA_MODEL: z.string().default('qwen2.5:0.5b'),
   OLLAMA_EMBEDDING_MODEL: z.string().default('nomic-embed-text'),
+  
+  // GROQ API (FREE - cloud based, no setup needed)
+  GROQ_API_KEY: z.string().optional(),
   
   // Llama.cpp Configuration (FASTEST - direct C++)
   LLAMACPP_URL: z.string().default('http://localhost:8080'),
@@ -48,7 +51,7 @@ const parseEnv = (): EnvConfig => {
     return {
       PORT: process.env.PORT || '3000',
       NODE_ENV: 'development',
-      LLM_PROVIDER: 'ollama',
+      LLM_PROVIDER: 'groq',
       OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
       OLLAMA_MODEL: process.env.OLLAMA_MODEL || 'qwen:7b',
       OLLAMA_EMBEDDING_MODEL: process.env.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text',

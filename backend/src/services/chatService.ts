@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { config, generateOllamaChat, generateLlamaCppChat } from '../config';
+import { config, generateOllamaChat, generateLlamaCppChat, generateGroqChat } from '../config';
 import { ChatMessage, ChatRequest, ChatResponse, Conversation } from '../types';
 import { searchDocuments } from './knowledgeService';
 import * as analytics from './analyticsService';
@@ -75,6 +75,15 @@ function getConversation(conversationId?: string): Conversation {
 async function generateChatResponse(messages: ChatMessage[], stream: boolean = false): Promise<string | (() => AsyncGenerator<string, void, unknown>)> {
   console.log(`[DEBUG] Using LLM provider: ${config.LLM_PROVIDER}`);
   
+  if (config.LLM_PROVIDER === 'groq') {
+    // Use Groq (FREE + FAST)
+    console.log('[DEBUG] Using Groq for chat');
+    return generateGroqChat(
+      messages.map(m => ({ role: m.role, content: m.content })),
+      { temperature: 0.3, maxTokens: 150, stream }
+    );
+  }
+
   if (config.LLM_PROVIDER === 'ollama') {
     // Use Ollama (FREE)
     console.log('[DEBUG] Using Ollama for chat');
@@ -93,8 +102,8 @@ async function generateChatResponse(messages: ChatMessage[], stream: boolean = f
     );
   }
 
-  // Only Ollama and Llama.cpp are supported
-  throw new Error(`Unsupported LLM provider: ${config.LLM_PROVIDER}. Only 'ollama' and 'llamacpp' are supported.`);
+  // Only Groq, Ollama, and Llama.cpp are supported
+  throw new Error(`Unsupported LLM provider: ${config.LLM_PROVIDER}. Only 'groq', 'ollama', and 'llamacpp' are supported.`);
 }
 
 /**
