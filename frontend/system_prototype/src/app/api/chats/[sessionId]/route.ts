@@ -32,6 +32,7 @@ export async function GET(
     console.log(`[Chat API] Fetching session ${sessionId}`);
     const supabase = createSupabaseClient();
 
+    // First, try to get from chat_state
     const { data, error } = await supabase
       .from("chat_state")
       .select("session_id, state_jsonb, updated_at")
@@ -39,33 +40,31 @@ export async function GET(
       .single();
 
     if (error) {
-      console.error(`[Chat API] Supabase error for session ${sessionId}:`, error);
+      console.error(`[Chat API] Supabase error for session ${sessionId}:`, error.message);
     }
+    
+    console.log(`[Chat API] Chat state query result:`, data ? "Found" : "Not found", error ? `Error: ${error.message}` : "");
     
     if (!data) {
       console.warn(`[Chat API] No chat_state found for session ${sessionId}`);
       
-      // Try to fetch from chat_sessions table as fallback
-      const { data: sessionData, error: sessionError } = await supabase
-        .from("chat_sessions")
-        .select("*")
-        .eq("id", sessionId)
-        .single();
-      
-      if (sessionData) {
-        console.log(`[Chat API] Found session in chat_sessions but not chat_state, returning empty state`);
-        return NextResponse.json({
-          session_id: sessionId,
-          state_jsonb: {
-            phase: "initial",
-            messages: [],
-            studentInfo: { fullName: null, studentId: null, programme: null },
-          },
-          updated_at: new Date().toISOString(),
-        });
-      }
-      
-      return NextResponse.json({ error: "Chat not found" }, { status: 404 });
+      // Return empty state instead of 404 - let the frontend start a new conversation
+      console.log(`[Chat API] Returning empty state for missing session ${sessionId}`);
+      return NextResponse.json({
+        success: true,
+        sessionId: sessionId,
+        updatedAt: new Date().toISOString(),
+        state: {
+          phase: "initial",
+          messages: [],
+          studentInfo: { fullName: null, studentId: null, programme: null },
+          selectedTopCategoryKey: null,
+          selectedSubcategoryKey: null,
+          selectedIssueKey: null,
+          collectedSlots: {},
+        },
+        result: null,
+      });
     }
 
     const state = data.state_jsonb as ChatStateJsonb;
