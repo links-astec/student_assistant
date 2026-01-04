@@ -17,7 +17,7 @@ export interface ChatOptions {
 }
 
 export async function generateGroqChat(
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
   options: ChatOptions = {}
 ): Promise<string> {
   const { temperature = 0.3, maxTokens = 150 } = options;

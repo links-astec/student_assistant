@@ -34,11 +34,6 @@ export type EnvConfig = z.infer<typeof envSchema>;
 const parseEnv = (): EnvConfig => {
   try {
     const parsed = envSchema.parse(process.env);
-    // Enforce Ollama provider: do not allow OpenAI usage from environment
-    if (parsed.LLM_PROVIDER === 'openai') {
-      console.warn('⚠️ LLM_PROVIDER=openai is not permitted; overriding to ollama');
-      parsed.LLM_PROVIDER = 'ollama';
-    }
     return parsed;
   } catch (error) {
     if (error instanceof z.ZodError) {

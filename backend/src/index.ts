@@ -82,7 +82,7 @@ const startServer = async () => {
    Search:     POST http://localhost:${PORT}/api/search
    Test Page:  http://localhost:${PORT}/test
    
-   LLM:        ${config.LLM_PROVIDER === 'llamacpp' ? 'Llama.cpp (phi-2)' : config.LLM_PROVIDER === 'openai' ? 'OpenAI' : `Ollama (${config.OLLAMA_MODEL || 'llama3.2'})`} with 90 school documents
+   LLM:        ${config.LLM_PROVIDER === 'groq' ? 'Groq (mixtral-8x7b)' : config.LLM_PROVIDER === 'llamacpp' ? 'Llama.cpp (phi-2)' : `Ollama (${config.OLLAMA_MODEL || 'llama3.2'})`} with 90 school documents
    Environment: ${config.NODE_ENV}
     `);
   });
