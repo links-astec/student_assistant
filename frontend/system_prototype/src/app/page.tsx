@@ -392,7 +392,7 @@ function HomeContent() {
         setError(null);
 
         // Track session activity
-        trackSession(activeSessionId, selectedCategory);
+        trackSession(activeSessionId, selectedCategory || undefined);
 
         try {
           // Call frontend proxy API (not streaming - just JSON)
