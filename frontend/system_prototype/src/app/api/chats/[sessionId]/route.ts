@@ -29,6 +29,7 @@ export async function GET(
       return NextResponse.json({ error: "Session ID required" }, { status: 400 });
     }
 
+    console.log(`[Chat API] Fetching session ${sessionId}`);
     const supabase = createSupabaseClient();
 
     const { data, error } = await supabase
@@ -37,8 +38,33 @@ export async function GET(
       .eq("session_id", sessionId)
       .single();
 
-    if (error || !data) {
-      console.error("[Chat API] Error fetching chat:", error);
+    if (error) {
+      console.error(`[Chat API] Supabase error for session ${sessionId}:`, error);
+    }
+    
+    if (!data) {
+      console.warn(`[Chat API] No chat_state found for session ${sessionId}`);
+      
+      // Try to fetch from chat_sessions table as fallback
+      const { data: sessionData, error: sessionError } = await supabase
+        .from("chat_sessions")
+        .select("*")
+        .eq("id", sessionId)
+        .single();
+      
+      if (sessionData) {
+        console.log(`[Chat API] Found session in chat_sessions but not chat_state, returning empty state`);
+        return NextResponse.json({
+          session_id: sessionId,
+          state_jsonb: {
+            phase: "initial",
+            messages: [],
+            studentInfo: { fullName: null, studentId: null, programme: null },
+          },
+          updated_at: new Date().toISOString(),
+        });
+      }
+      
       return NextResponse.json({ error: "Chat not found" }, { status: 404 });
     }
 

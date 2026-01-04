@@ -113,6 +113,10 @@ export async function POST(request: NextRequest) {
       
       if (insertError) {
         console.error("[Chat] Failed to insert chat state:", insertError);
+        console.error("[Chat] Attempted to insert for session:", sessionId);
+        // Continue anyway - the session exists in chat_sessions
+      } else {
+        console.log("[Chat] Successfully created chat_state for session:", sessionId);
       }
     }
 
