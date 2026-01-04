@@ -131,17 +131,21 @@ function HomeContent() {
     setError(null);
 
     try {
-      console.log("[Chat] Fetching session data...");
+      console.log("[Chat] Fetching session data from /api/chats/" + existingSessionId);
       // Fetch the chat state from Supabase via a new API
       const response = await apiFetch(`/api/chats/${existingSessionId}`);
       
+      console.log("[Chat] Response status:", response.status, response.statusText);
+      
       if (!response.ok) {
-        throw new Error(`Failed to load chat: ${response.status}`);
+        const errorText = await response.text();
+        console.error("[Chat] API Error response:", errorText);
+        throw new Error(`Failed to load chat: ${response.status} ${response.statusText}`);
       }
 
       const data = await response.json();
-      console.log("[Chat] Response received:", data);
-      console.log("[Chat] Message count from API:", data.state?.messages?.length || 0);
+      console.log("[Chat] Response data:", JSON.stringify(data, null, 2));
+      console.log("[Chat] Has success:", !!data.success, "Has state:", !!data.state);
       
       if (data.success && data.state) {
         console.log("[Chat] Setting session ID to:", existingSessionId);
@@ -182,14 +186,16 @@ function HomeContent() {
           setSelectedCategory(data.state.selectedTopCategoryKey);
           console.log("[Chat] Restored category:", data.state.selectedTopCategoryKey);
         }
+        
+        console.log("[Chat] Session loaded successfully!");
     } else {
-      console.log("[Chat] Session not found:", existingSessionId);
-      setError("Chat session not found.");
+      console.error("[Chat] Invalid response structure - success:", data.success, "state:", !!data.state);
+      setError(`Failed to load chat session: invalid data format`);
     }
     } catch (err) {
-      console.error("Failed to load existing session:", err);
-      setError("Failed to load chat. Please try again.");
-      setError("Failed to load chat. Please try again.");
+      console.error("[Chat] Exception loading session:", err);
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      setError(`Failed to load chat: ${errorMsg}`);
     } finally {
       setIsLoading(false);
     }
