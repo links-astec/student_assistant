@@ -64,4 +64,54 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * GET /api/chats/:sessionId
+ * Get a specific chat session by ID
+ */
+router.get('/:sessionId', async (req: Request, res: Response) => {
+  try {
+    const { sessionId } = req.params;
+
+    if (!supabaseAdmin) {
+      return res.status(500).json({
+        success: false,
+        error: 'Database not configured',
+      });
+    }
+
+    // Get the specific chat session from the database
+    const { data: session, error } = await supabaseAdmin
+      .from('chat_state')
+      .select('*')
+      .eq('session_id', sessionId)
+      .single();
+
+    if (error) {
+      console.error('Error fetching chat:', error);
+      return res.status(404).json({
+        success: false,
+        error: 'Chat session not found',
+      });
+    }
+
+    const state = session.state_jsonb || {};
+    
+    res.json({
+      success: true,
+      session: {
+        sessionId: session.session_id,
+        createdAt: session.created_at,
+        updatedAt: session.updated_at,
+        state,
+      },
+    });
+  } catch (error) {
+    console.error('Error in /api/chats/:sessionId:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to load chat session',
+    });
+  }
+});
+
 export default router;
