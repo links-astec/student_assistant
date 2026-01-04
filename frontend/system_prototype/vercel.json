@@ -25,7 +25,7 @@
       "destination": "https://studentassistant-production.up.railway.app/api/health"
     },
     {
-      "source": "/(.*)",
+      "source": "/(?!api/).*",
       "destination": "/index.html"
     }
   ],
