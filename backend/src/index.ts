@@ -72,7 +72,8 @@ const startServer = async () => {
     console.log('ℹ️  Skipping embeddings load in production environment');
   }
 
-  app.listen(PORT, () => {
+  const HOST = '0.0.0.0'; // Railway requires 0.0.0.0
+  app.listen(PORT, HOST, () => {
     console.log(`
 🚀 Coventry Student Assistant API is running!
    
@@ -88,10 +89,8 @@ const startServer = async () => {
   });
 };
 
-// Start server only in development/local environment
-if (config.NODE_ENV !== 'production') {
-  startServer();
-}
+// Start server (Railway needs this to run in production too)
+startServer();
 
 // For Vercel serverless functions, export the app directly
 export default app;
