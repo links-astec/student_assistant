@@ -87,9 +87,11 @@ export async function GET(request: NextRequest) {
         
         // Filter by client ID
         const storedClientId = state.clientIp; // This field stores device ID or IP
+        console.log(`[Chats API] Chat ${row.session_id}: stored=${storedClientId}, current=${clientId}, match=${storedClientId === clientId}`);
         
         // Skip if stored ID exists and doesn't match current client
         if (storedClientId && storedClientId !== "unknown" && storedClientId !== clientId) {
+          console.log(`[Chats API] Skipping chat ${row.session_id} - device ID mismatch`);
           continue;
         }
         
