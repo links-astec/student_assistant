@@ -33,11 +33,6 @@ if (config.NODE_ENV !== 'test') {
 // API routes
 app.use('/api', routes);
 
-// Serve test.html at /test
-app.get('/test', (req, res) => {
-  res.sendFile(path.join(__dirname, '../test.html'));
-});
-
 // Root endpoint
 app.get('/', (req, res) => {
   res.json({
@@ -55,21 +50,26 @@ app.get('/', (req, res) => {
 // Error handling
 app.use(notFoundHandler);
 app.use(errorHandler);
+app.use(errorHandler);
 
 // Start server
 const PORT = parseInt(config.PORT, 10);
 
 const startServer = async () => {
-  // Try to load cached embeddings on startup
-  try {
-    const loaded = loadCachedEmbeddings();
-    if (loaded) {
-      console.log('✅ Knowledge base loaded from cache');
-    } else {
-      console.log('⚠️  No cached embeddings found. Run "npm run ingest" to generate them.');
+  // Try to load cached embeddings on startup (skip in serverless environments)
+  if (config.NODE_ENV !== 'production') {
+    try {
+      const loaded = loadCachedEmbeddings();
+      if (loaded) {
+        console.log('✅ Knowledge base loaded from cache');
+      } else {
+        console.log('⚠️  No cached embeddings found. Run "npm run ingest" to generate them.');
+      }
+    } catch (error) {
+      console.error('Error loading embeddings:', error);
     }
-  } catch (error) {
-    console.error('Error loading embeddings:', error);
+  } else {
+    console.log('ℹ️  Skipping embeddings load in production environment');
   }
 
   app.listen(PORT, () => {
@@ -88,6 +88,13 @@ const startServer = async () => {
   });
 };
 
-startServer();
+// Start server only in development/local environment
+if (config.NODE_ENV !== 'production') {
+  startServer();
+}
 
+// For Vercel serverless functions, export the app directly
 export default app;
+
+// Also export as a serverless function
+export const handler = app;

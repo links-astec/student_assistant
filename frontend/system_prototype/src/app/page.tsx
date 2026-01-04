@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { ChatWindow } from "@/components/ChatWindow";
 import { QuickReplies } from "@/components/QuickReplies";
@@ -14,15 +14,20 @@ import { SetupScreen } from "@/components/SetupScreen";
 import ChatHistoryModal from "@/components/ChatHistoryModal";
 import { useRouter } from "next/navigation";
 import type { ChatResponse, Category } from "@/lib/supabase/types";
+import { getFetchOptions } from "@/lib/deviceId";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
+  confirmationNeeded?: boolean;
+  confirmationOptions?: { id: string; label: string; value: string }[];
+  emailGenerated?: boolean;
+  emailContent?: string;
 }
 
 type AppPhase = "loading" | "setup_required" | "ready";
 
-export default function Home() {
+function HomeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [appPhase, setAppPhase] = useState<AppPhase>("loading");
@@ -52,21 +57,29 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCategoryCards, setShowCategoryCards] = useState(true);
-  const [hasInteracted, setHasInteracted] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [showChatHistory, setShowChatHistory] = useState(false);
   const initialized = useRef(false);
 
+  // Custom fetch with device ID
+  const apiFetch = (url: string, options?: RequestInit) => {
+    return fetch(url, getFetchOptions(options));
+  };
+
   // Handle loading a chat from history
   const handleSelectChat = (selectedSessionId: string) => {
     setShowChatHistory(false);
+    // Clear current session first
+    setMessages([]);
+    setSessionId(null);
+    // Navigate to the session - useEffect will handle loading
     router.push(`/?session=${selectedSessionId}`);
   };
 
   // Track session with backend
   const trackSession = async (sid: string, category?: string, studentName?: string, studentId?: string) => {
     try {
-      await fetch("/api/tracking", {
+      await apiFetch("/api/tracking", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
@@ -83,12 +96,31 @@ export default function Home() {
 
   // Check Supabase and load categories on mount
   useEffect(() => {
-    if (!initialized.current) {
-      initialized.current = true;
-      checkSetupAndLoadCategories();
-    }
+    const init = async () => {
+      // Load categories once on initial mount
+      if (!initialized.current) {
+        initialized.current = true;
+        await checkSetupAndLoadCategories();
+      }
+      
+      // Check URL parameter for session (runs on every searchParams change)
+      const urlSessionId = searchParams?.get("session");
+      if (urlSessionId) {
+        console.log("[Init] Loading session from URL:", urlSessionId);
+        await loadExistingSession(urlSessionId);
+      } else {
+        // Only check localStorage on initial load when no URL session
+        const savedSessionId = localStorage.getItem("chatSessionId");
+        if (savedSessionId && !sessionId) {
+          console.log("[Init] Restoring session from localStorage:", savedSessionId);
+          await loadExistingSession(savedSessionId);
+        }
+      }
+    };
+    
+    init();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [searchParams]);
 
   // Load existing session from URL parameter
   const loadExistingSession = async (existingSessionId: string) => {
@@ -96,49 +128,62 @@ export default function Home() {
     setError(null);
 
     try {
+      console.log("[Chat] Loading session:", existingSessionId);
       // Fetch the chat state from Supabase via a new API
-      const response = await fetch(`/api/chats/${existingSessionId}`);
+      const response = await apiFetch(`/api/chats/${existingSessionId}`);
       
       if (!response.ok) {
         throw new Error("Failed to load chat");
       }
 
       const data = await response.json();
+      console.log("[Chat] Session data:", data);
+      console.log("[Chat] Messages from server:", data.state?.messages);
       
       if (data.success && data.state) {
         setSessionId(existingSessionId);
+        localStorage.setItem("chatSessionId", existingSessionId);
+        console.log("[Chat] Saved session to localStorage");
         
         // Restore messages
         if (data.state.messages && data.state.messages.length > 0) {
-          setMessages(data.state.messages.map((m: { role: string; content: string }) => ({
+          const restoredMessages = data.state.messages.map((m: { role: string; content: string }) => ({
             role: m.role as "user" | "assistant",
             content: m.content,
-          })));
+          }));
+          console.log("[Chat] Restoring messages:", restoredMessages);
+          setMessages(restoredMessages);
+          console.log("[Chat] Restored", restoredMessages.length, "messages");
+        } else {
+          console.log("[Chat] No messages to restore");
+          setMessages([]);
         }
 
         // Restore result if phase is complete
         if (data.state.phase === "complete" && data.result) {
           setResult(data.result);
+          console.log("[Chat] Restored result");
         }
 
         // Hide category cards if user has already interacted
-        if (data.state.phase !== "initial") {
+        if (data.state.messages?.length > 0 || data.state.phase !== "initial") {
           setShowCategoryCards(false);
-          setHasInteracted(true);
+          console.log("[Chat] Hiding category cards - has", data.state.messages?.length || 0, "messages");
         }
 
         // Restore selected category
         if (data.state.selectedTopCategoryKey) {
           setSelectedCategory(data.state.selectedTopCategoryKey);
+          console.log("[Chat] Restored category:", data.state.selectedTopCategoryKey);
         }
-      } else {
-        // Session not found, start new
-        await startChat();
-      }
+    } else {
+      console.log("[Chat] Session not found:", existingSessionId);
+      setError("Chat session not found.");
+    }
     } catch (err) {
       console.error("Failed to load existing session:", err);
-      // Fall back to starting new chat
-      await startChat();
+      setError("Failed to load chat. Please try again.");
+      setError("Failed to load chat. Please try again.");
     } finally {
       setIsLoading(false);
     }
@@ -146,8 +191,8 @@ export default function Home() {
 
   const checkSetupAndLoadCategories = async () => {
     try {
-      // Try to fetch categories to check if Supabase is configured
-      const response = await fetch("/api/categories");
+      // Try to fetch health check to verify backend is working and Supabase is configured
+      const response = await apiFetch("/api/health");
 
       if (!response.ok) {
         setAppPhase("setup_required");
@@ -155,18 +200,26 @@ export default function Home() {
       }
 
       const data = await response.json();
-      setPrimaryCategories(data.primary || []);
-      setSecondaryCategories(data.secondary || []);
-      setAppPhase("ready");
-
-      // Check if we have a session parameter to load
-      const sessionParam = searchParams.get("session");
-      if (sessionParam) {
-        await loadExistingSession(sessionParam);
-      } else {
-        // Initialize new chat session
-        await startChat();
+      if (data.status !== "healthy") {
+        setAppPhase("setup_required");
+        return;
       }
+
+      // If backend is healthy, try to load categories (this might fail if database is empty, but that's ok)
+      try {
+        const categoriesResponse = await apiFetch("/api/categories");
+        if (categoriesResponse.ok) {
+          const categoriesData = await categoriesResponse.json();
+          setPrimaryCategories(categoriesData.primary || []);
+          setSecondaryCategories(categoriesData.secondary || []);
+        }
+      } catch (categoriesError) {
+        console.warn("Categories not available yet:", categoriesError);
+        // Don't fail setup check if categories aren't available
+      }
+
+      setAppPhase("ready");
+      console.log("[Setup] Categories loaded, ready to use");
     } catch (err) {
       console.error("Setup check failed:", err);
       setAppPhase("setup_required");
@@ -178,7 +231,7 @@ export default function Home() {
     setError(null);
 
     try {
-      const response = await fetch("/api/chat", {
+      const response = await apiFetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ actionType: "start" }),
@@ -190,9 +243,10 @@ export default function Home() {
 
       const data: ChatResponse = await response.json();
       setSessionId(data.sessionId);
-
-      // Track session start
-      trackSession(data.sessionId);
+      
+      // Save session ID to localStorage to persist on refresh
+      localStorage.setItem("chatSessionId", data.sessionId);
+      console.log("[Chat] Session created and saved:", data.sessionId);
 
       // Add bot messages
       for (const msg of data.botMessages) {
@@ -207,28 +261,60 @@ export default function Home() {
   };
 
   const selectCategory = async (categoryKey: string, categoryTitle: string) => {
-    if (!sessionId || isLoading) return;
+    if (isLoading) return;
 
-    setHasInteracted(true);
+    let activeSessionId = sessionId;
+
+    // If no session exists, create one first
+    if (!activeSessionId) {
+      console.log("[Category] No session exists, creating one first");
+      try {
+        const response = await apiFetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ actionType: "start" }),
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to start chat");
+        }
+
+        const data: ChatResponse = await response.json();
+        activeSessionId = data.sessionId;
+        setSessionId(data.sessionId);
+        localStorage.setItem("chatSessionId", data.sessionId);
+        console.log("[Chat] Session created for category:", data.sessionId);
+
+        // Add greeting messages
+        for (const msg of data.botMessages) {
+          setMessages((prev) => [...prev, { role: "assistant", content: msg.content }]);
+        }
+      } catch (err) {
+        setError("Failed to create session. Please refresh.");
+        console.error(err);
+        return;
+      }
+    }
+
     setShowCategoryCards(false);
     setSelectedCategory(categoryTitle);
     setIsLoading(true);
     setError(null);
 
     // Track category selection
-    trackSession(sessionId, categoryTitle);
+    trackSession(activeSessionId, categoryTitle);
 
     // Add user message to UI immediately
     const userMessage = `Category: ${categoryTitle}`;
     setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
 
     try {
-      const response = await fetch("/api/chat", {
+      const response = await apiFetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           actionType: "selectCategory",
-          sessionId,
+          sessionId: activeSessionId,
           categoryKey,
         }),
       });
@@ -247,10 +333,42 @@ export default function Home() {
 
   const sendMessage = useCallback(
     async (message: string) => {
-      if (!sessionId || isLoading) return;
+      if (isLoading) return;
 
-      // Mark as interacted and hide category cards
-      setHasInteracted(true);
+      let activeSessionId = sessionId;
+
+      // If no session exists, create one first
+      if (!activeSessionId) {
+        console.log("[Message] No session exists, creating one first");
+        try {
+          const response = await apiFetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ actionType: "start" }),
+          });
+
+          if (!response.ok) {
+            throw new Error("Failed to start chat");
+          }
+
+          const data: ChatResponse = await response.json();
+          activeSessionId = data.sessionId;
+          setSessionId(data.sessionId);
+          localStorage.setItem("chatSessionId", data.sessionId);
+          console.log("[Chat] Session created for message:", data.sessionId);
+
+          // Add greeting messages
+          for (const msg of data.botMessages) {
+            setMessages((prev) => [...prev, { role: "assistant", content: msg.content }]);
+          }
+        } catch (err) {
+          setError("Failed to create session. Please refresh.");
+          console.error(err);
+          return;
+        }
+      }
+
+      // User started chatting - hide category cards (free chat mode)
       setShowCategoryCards(false);
 
       // Add user message to UI
@@ -261,71 +379,21 @@ export default function Home() {
       setError(null);
 
       try {
-        // Call backend streaming chat API for faster AI responses
-        const backendUrl = process.env.NODE_ENV === 'production' 
-          ? '/api/chat' // In production, proxy through Next.js
-          : 'http://localhost:3001/api/chat'; // In development, call backend directly
-
-        const streamResponse = await fetch(backendUrl, {
+        // Call frontend proxy API (not streaming - just JSON)
+        const response = await apiFetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            message,
-            conversationId: sessionId,
-            stream: true,
+            actionType: "message",
+            sessionId: activeSessionId,
+            userMessage: message,
           }),
         });
 
-        if (streamResponse.ok && streamResponse.body) {
-          // Handle streaming response from backend
-          const reader = streamResponse.body.getReader();
-          const decoder = new TextDecoder();
-          let assistantMessage = "";
+        if (!response.ok) throw new Error("Failed to send message");
 
-          try {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-
-              const chunk = decoder.decode(value, { stream: true });
-              assistantMessage += chunk;
-
-              // Update the UI with the accumulating message
-              setMessages((prev) => {
-                const newMessages = [...prev];
-                const lastMessage = newMessages[newMessages.length - 1];
-                if (lastMessage?.role === "assistant") {
-                  lastMessage.content = assistantMessage;
-                } else {
-                  newMessages.push({ role: "assistant", content: assistantMessage });
-                }
-                return newMessages;
-              });
-            }
-          } finally {
-            reader.releaseLock();
-          }
-
-          // After streaming is complete, no need for additional API call
-          // The streaming response has already updated the UI
-          console.log("Streaming response complete");
-        } else {
-          // Fallback to original frontend logic if streaming fails
-          const response = await fetch("/api/chat", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              actionType: "message",
-              sessionId,
-              userMessage: message,
-            }),
-          });
-
-          if (!response.ok) throw new Error("Failed to send message");
-
-          const data: ChatResponse = await response.json();
-          handleResponse(data);
-        }
+        const data: ChatResponse = await response.json();
+        handleResponse(data);
       } catch (err) {
         setError("Failed to send message. Please try again.");
         console.error(err);
@@ -348,7 +416,7 @@ export default function Home() {
       setError(null);
 
       try {
-        const response = await fetch("/api/chat", {
+        const response = await apiFetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -386,7 +454,7 @@ export default function Home() {
       setError(null);
 
       try {
-        const response = await fetch("/api/chat", {
+        const response = await apiFetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -411,9 +479,17 @@ export default function Home() {
   );
 
   const handleResponse = (data: ChatResponse) => {
-    // Add bot messages
+    // Add bot messages with metadata
     for (const msg of data.botMessages) {
-      setMessages((prev) => [...prev, { role: "assistant", content: msg.content }]);
+      const message: Message = { 
+        role: "assistant", 
+        content: msg.content,
+        confirmationNeeded: msg.confirmationNeeded,
+        confirmationOptions: msg.confirmationOptions,
+        emailGenerated: msg.emailGenerated,
+        emailContent: msg.emailContent,
+      };
+      setMessages((prev) => [...prev, message]);
     }
 
     // Set student info request if present
@@ -455,6 +531,46 @@ export default function Home() {
     }
   };
 
+  const handleConfirmation = useCallback(
+    async (choice: "yes" | "no") => {
+      if (!sessionId || isLoading) return;
+
+      const choiceText = choice === "yes" ? "Yes, that's correct" : "No, let me clarify";
+      
+      // Add user choice to messages
+      setMessages((prev) => [
+        ...prev.map(m => ({ ...m, confirmationNeeded: false, confirmationOptions: undefined })), // Clear confirmations from all messages
+        { role: "user", content: choiceText }
+      ]);
+      
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const response = await apiFetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            actionType: "confirmation",
+            sessionId,
+            userMessage: choiceText,
+          }),
+        });
+
+        if (!response.ok) throw new Error("Failed to process confirmation");
+
+        const data: ChatResponse = await response.json();
+        handleResponse(data);
+      } catch (err) {
+        setError("Failed to process your confirmation. Please try again.");
+        console.error(err);
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [sessionId, isLoading]
+  );
+
   const handleQuickReply = (reply: { id: string; label: string; value: string }) => {
     // Check if this is a confirmation response
     if (reply.id === "yes" || reply.id === "no") {
@@ -484,7 +600,7 @@ export default function Home() {
       setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
 
       try {
-        const response = await fetch("/api/chat", {
+        const response = await apiFetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -521,7 +637,7 @@ export default function Home() {
       setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
 
       try {
-        const response = await fetch("/api/chat", {
+        const response = await apiFetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -555,7 +671,7 @@ export default function Home() {
     setResult(null);
     setError(null);
     setShowCategoryCards(true);
-    setHasInteracted(false);
+    setSelectedCategory(null);
     startChat();
   };
 
@@ -642,16 +758,65 @@ export default function Home() {
           <>
             {/* Chat messages */}
             <div className="flex-1 overflow-y-auto">
-              <ChatWindow messages={messages} isLoading={isLoading} />
+              <ChatWindow 
+                messages={messages} 
+                isLoading={isLoading}
+                onConfirmation={handleConfirmation}
+              />
 
-              {/* Category cards - shown inline, before user interaction */}
-              {showCategoryCards && !hasInteracted && (
-                <CategoryCards
-                  primaryCategories={primaryCategories}
-                  secondaryCategories={secondaryCategories}
-                  onSelect={selectCategory}
-                  disabled={isLoading}
-                />
+              {/* Category cards - shown when no category selected and no messages yet */}
+              {showCategoryCards && messages.length === 0 && !selectedCategory && (
+                <div>
+                  <CategoryCards
+                    primaryCategories={primaryCategories}
+                    secondaryCategories={secondaryCategories}
+                    onSelect={selectCategory}
+                    disabled={isLoading}
+                  />
+                  {/* Skip category selection button */}
+                  <div className="px-6 py-4 text-center border-t border-gray-200">
+                    <button
+                      onClick={async () => {
+                        // Create session if needed when skipping
+                        if (!sessionId) {
+                          setIsLoading(true);
+                          try {
+                            const response = await apiFetch("/api/chat", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ actionType: "start" }),
+                            });
+
+                            if (!response.ok) {
+                              throw new Error("Failed to start chat");
+                            }
+
+                            const data: ChatResponse = await response.json();
+                            setSessionId(data.sessionId);
+                            localStorage.setItem("chatSessionId", data.sessionId);
+                            console.log("[Chat] Session created via skip:", data.sessionId);
+
+                            // Add greeting messages
+                            for (const msg of data.botMessages) {
+                              setMessages((prev) => [...prev, { role: "assistant", content: msg.content }]);
+                            }
+                          } catch (err) {
+                            setError("Failed to create session. Please refresh.");
+                            console.error(err);
+                            setIsLoading(false);
+                            return;
+                          }
+                          setIsLoading(false);
+                        }
+                        setShowCategoryCards(false);
+                      }}
+                      className="text-sm text-gray-500 hover:text-gray-700 underline"
+                      disabled={isLoading}
+                    >
+                      Skip and ask a question
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
 
@@ -715,5 +880,13 @@ export default function Home() {
         onSelectChat={handleSelectChat}
       />
     </main>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading...</div>}>
+      <HomeContent />
+    </Suspense>
   );
 }

@@ -12,14 +12,11 @@ const envSchema = z.object({
   
   // Ollama Configuration (FREE - runs locally)
   OLLAMA_BASE_URL: z.string().default('http://localhost:11434'),
-  OLLAMA_MODEL: z.string().default('llama3.2'),
+  OLLAMA_MODEL: z.string().default('qwen2.5:0.5b'),
   OLLAMA_EMBEDDING_MODEL: z.string().default('nomic-embed-text'),
   
   // Llama.cpp Configuration (FASTEST - direct C++)
   LLAMACPP_URL: z.string().default('http://localhost:8080'),
-  
-  // OpenAI Configuration (PAID - optional)
-  OPENAI_API_KEY: z.string().optional(),
   
   // Supabase Configuration (optional)
   SUPABASE_URL: z.string().optional(),
@@ -33,7 +30,13 @@ export type EnvConfig = z.infer<typeof envSchema>;
 
 const parseEnv = (): EnvConfig => {
   try {
-    return envSchema.parse(process.env);
+    const parsed = envSchema.parse(process.env);
+    // Enforce Ollama provider: do not allow OpenAI usage from environment
+    if (parsed.LLM_PROVIDER === 'openai') {
+      console.warn('⚠️ LLM_PROVIDER=openai is not permitted; overriding to ollama');
+      parsed.LLM_PROVIDER = 'ollama';
+    }
+    return parsed;
   } catch (error) {
     if (error instanceof z.ZodError) {
       console.error('❌ Environment validation failed:');
@@ -41,16 +44,15 @@ const parseEnv = (): EnvConfig => {
         console.error(`  - ${err.path.join('.')}: ${err.message}`);
       });
     }
-    // Return defaults for development
+    // Return defaults for development (force ollama)
     return {
       PORT: process.env.PORT || '3000',
       NODE_ENV: 'development',
       LLM_PROVIDER: 'ollama',
       OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
-      OLLAMA_MODEL: process.env.OLLAMA_MODEL || 'llama3.2',
+      OLLAMA_MODEL: process.env.OLLAMA_MODEL || 'qwen:7b',
       OLLAMA_EMBEDDING_MODEL: process.env.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text',
       LLAMACPP_URL: process.env.LLAMACPP_URL || 'http://localhost:8080',
-      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
       SUPABASE_URL: process.env.SUPABASE_URL,
       SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
       SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,

@@ -3,9 +3,12 @@
 
 import { NextRequest, NextResponse } from "next/server";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
-const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:3001";
+// Backend URL configuration
+// Development: http://localhost:3000
+// Production: Set NEXT_PUBLIC_BACKEND_URL in environment variables
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000";
 
 // POST - Register/update session
 export async function POST(request: NextRequest) {

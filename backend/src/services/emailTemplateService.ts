@@ -99,13 +99,17 @@ export function generate5W1H(
     how?: string;
   }
 ): FiveWOneH {
+  // Extract more specific information from the classification
+  const specificIssue = classification.specificIssue || classification.subcategory || classification.category;
+  const department = classification.suggestedDepartment || 'Student Support';
+
   return {
-    who: `${student.name} (Student ID: ${student.studentId}${student.course ? `, ${student.course}` : ''}${student.yearOfStudy ? `, Year ${student.yearOfStudy}` : ''})`,
-    what: classification.specificIssue || `${classification.category} - ${classification.subcategory}`,
-    when: additionalContext?.when || 'Currently experiencing this issue',
-    where: additionalContext?.where || 'Coventry University',
-    why: additionalContext?.why || 'This matter requires attention for my studies to proceed smoothly',
-    how: additionalContext?.how || 'I would appreciate your guidance on how to resolve this',
+    who: `${student.name} (Student ID: ${student.studentId}${student.course ? `, studying ${student.course}` : ''}${student.yearOfStudy ? ` in Year ${student.yearOfStudy}` : ''})`,
+    what: specificIssue,
+    when: additionalContext?.when || 'Recently',
+    where: additionalContext?.where || `the ${department} department`,
+    why: additionalContext?.why || 'This is affecting my ability to continue with my studies effectively',
+    how: additionalContext?.how || 'I would appreciate your guidance and assistance in resolving this matter',
   };
 }
 
@@ -168,7 +172,7 @@ export function generateEmailTemplate(
   
   // Build subject - prioritize actual user message over classification if it's more descriptive
   // Take first 50 chars of user message as a better subject if classification looks generic
-  let subjectIssue = classification.specificIssue || classification.subcategory;
+  let subjectIssue = classification.specificIssue || classification.subcategory || 'my inquiry';
   
   // If the userMessage is more specific, use it for the subject
   if (userMessage && userMessage.length > 10) {
@@ -194,20 +198,29 @@ export function generateEmailTemplate(
     : `I'm ${student.name}, a student at Coventry University.`;
   
   // Use the user's actual message for issue description, falling back to classification
-  const issueDescription = userMessage && userMessage.length > 5 
-    ? userMessage 
-    : fiveWOneH.what;
+  const issueDescription = userMessage && userMessage.length > 5
+    ? userMessage
+    : `a ${fiveWOneH.what.toLowerCase()} matter`;
   
-  const timeContext = fiveWOneH.when === 'Currently experiencing this issue'
+  // Build more natural time context
+  const timeContext = fiveWOneH.when === 'Recently'
     ? "I've been dealing with this recently"
+    : fiveWOneH.when === 'Currently experiencing this issue'
+    ? "I'm currently experiencing this issue"
     : `This started ${fiveWOneH.when.toLowerCase()}`;
   
+  // Build more natural impact description
   const impact = fiveWOneH.why === 'This matter requires attention for my studies to proceed smoothly'
     ? "and it's starting to affect my studies"
+    : fiveWOneH.why === 'This is affecting my ability to continue with my studies effectively'
+    ? "and it's affecting my ability to continue with my studies effectively"
     : `and ${fiveWOneH.why.toLowerCase()}`;
   
+  // Build more natural request
   const whatNeeded = fiveWOneH.how === 'I would appreciate your guidance on how to resolve this'
     ? "I'd really appreciate any help or guidance you can offer."
+    : fiveWOneH.how === 'I would appreciate your guidance and assistance in resolving this matter'
+    ? "I'd really appreciate your guidance and assistance in resolving this matter."
     : fiveWOneH.how;
   
   const body = `${template.greeting.replace('{department}', department)}

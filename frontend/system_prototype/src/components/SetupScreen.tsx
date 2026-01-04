@@ -20,10 +20,10 @@ export function SetupScreen() {
             </svg>
           </div>
           <h1 className="text-2xl font-bold text-gray-900 mb-2">
-            Supabase Setup Required
+            Application Setup Required
           </h1>
           <p className="text-gray-600">
-            Please configure your Supabase credentials to use CampusFlow
+            Please ensure your backend is properly configured and running
           </p>
         </div>
 
@@ -36,15 +36,7 @@ export function SetupScreen() {
                 1
               </span>
               <div>
-                <strong>Create a Supabase project</strong> at{" "}
-                <a
-                  href="https://supabase.com"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary-600 hover:underline"
-                >
-                  supabase.com
-                </a>
+                <strong>Deploy Backend</strong> to Vercel with environment variables
               </div>
             </li>
 
@@ -53,12 +45,7 @@ export function SetupScreen() {
                 2
               </span>
               <div>
-                <strong>Run the database migration</strong>
-                <br />
-                Go to SQL Editor and execute{" "}
-                <code className="bg-gray-200 px-1 rounded">
-                  supabase/migrations/001_initial_schema.sql
-                </code>
+                <strong>Configure Frontend</strong> to connect to the backend API
               </div>
             </li>
 
@@ -67,13 +54,7 @@ export function SetupScreen() {
                 3
               </span>
               <div>
-                <strong>Seed the database</strong>
-                <br />
-                Execute{" "}
-                <code className="bg-gray-200 px-1 rounded">
-                  supabase/seed.sql
-                </code>{" "}
-                in SQL Editor
+                <strong>Verify Deployment</strong> - Check that all services are running
               </div>
             </li>
 

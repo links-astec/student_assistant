@@ -1,112 +1,81 @@
-// POST /api/chat - Main orchestrator endpoint
-// Handles all chat interactions and state management
-
-import { NextRequest, NextResponse } from "next/server";
-import type { SupabaseClient } from "@supabase/supabase-js";
+﻿import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseClient } from "@/lib/supabase/client";
-import { createDiagnosisEngine } from "@/lib/diagnosis";
-import type {
-  ChatRequest,
-  ChatResponse,
-  ChatState,
-  ChatSessionRow,
-  ChatStateRow,
-} from "@/lib/supabase/types";
-import type { DiagnosisEngineMode, DiagnosisEngine } from "@/lib/diagnosis/interfaces";
 
-export const runtime = "edge";
+// Backend URL configuration
+// Development: http://localhost:3000
+// Production: Set NEXT_PUBLIC_BACKEND_URL in environment variables
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000";
 
-// Get client IP from request headers
-function getClientIp(request: NextRequest): string {
+function getClientIdentifier(request: NextRequest): string {
+  // Priority 1: Device ID from client (for local dev and session isolation)
+  const deviceId = request.headers.get("x-device-id");
+  if (deviceId && deviceId !== "unknown") {
+    return deviceId;
+  }
+  
+  // Priority 2: Real IP address
   const forwardedFor = request.headers.get("x-forwarded-for");
   const realIp = request.headers.get("x-real-ip");
-  return forwardedFor?.split(",")[0]?.trim() || realIp || "unknown";
+  const ip = forwardedFor?.split(",")[0]?.trim() || realIp;
+  
+  if (ip && ip !== "unknown" && ip !== "::1" && ip !== "127.0.0.1") {
+    return `ip:${ip}`;
+  }
+  
+  // Fallback: unknown (but this means all sessions are shared)
+  return "unknown";
 }
 
-// Initialize empty state
-function createInitialState(clientIp?: string): ChatState {
-  return {
-    phase: "initial",
-    selectedTopCategoryKey: null,
-    selectedSubcategoryKey: null,
-    studentInfo: {
-      fullName: null,
-      studentId: null,
-      programme: null,
-    },
-    originalMessage: null,
-    candidateIssues: [],
-    selectedIssueKey: null,
-    currentQuestionIndex: 0,
-    collectedSlots: {},
-    messages: [],
-    clientIp: clientIp || "unknown",
-  };
-}
-
-// Add message to state
-function addMessage(
-  state: ChatState,
-  role: "user" | "assistant",
-  content: string
-): ChatState {
-  return {
-    ...state,
-    messages: [
-      ...state.messages,
-      { role, content, timestamp: new Date().toISOString() },
-    ],
-  };
+interface ChatRequest {
+  actionType?: string; // For compatibility with frontend page.tsx
+  sessionId?: string;
+  userMessage?: string;
+  message?: string;
+  conversationId?: string;
+  categoryKey?: string;
+  categoryTitle?: string;
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body: ChatRequest = await request.json();
-    const {
-      actionType,
-      sessionId,
-      categoryKey,
-      studentInfo,
-      subcategoryKey,
-      userMessage,
-      answer,
-      confirmed,
-    } = body;
-
-    // Get client IP for session tracking
-    const clientIp = getClientIp(request);
-
     const supabase = createSupabaseClient();
+    const clientId = getClientIdentifier(request);
 
-    // Get diagnosis mode from env
-    const diagnosisMode = (process.env.DIAGNOSIS_MODE ||
-      "rule") as DiagnosisEngineMode;
-    const drafterMode = (process.env.DRAFTER_MODE || "template") as
-      | "template"
-      | "llm";
+    // Determine input fields
+    const userMessage = body.userMessage || body.message;
+    let sessionId = body.sessionId || body.conversationId;
+    const actionType = body.actionType || "message";
 
-    const engine = createDiagnosisEngine(supabase, diagnosisMode, drafterMode);
+    console.log(`[Chat] Request: actionType=${actionType}, sessionId=${sessionId}, hasMessage=${!!userMessage}, clientId=${clientId}`);
 
-    let currentSessionId = sessionId;
-    let state: ChatState;
-
-    // Load or create session
-    if (currentSessionId) {
-      const { data: existingState } = await supabase
+    // If no sessionId and actionType is "start", check for existing session for THIS user
+    if (!sessionId && actionType === "start") {
+      // Try to find an existing recent session for this specific client
+      const { data: allSessions } = await supabase
         .from("chat_state")
-        .select("state_jsonb")
-        .eq("session_id", currentSessionId)
-        .single();
+        .select("session_id, state_jsonb, updated_at")
+        .order("updated_at", { ascending: false })
+        .limit(100);
 
-      const stateRow = existingState as ChatStateRow | null;
-      state = stateRow?.state_jsonb || createInitialState(clientIp);
-      
-      // Ensure clientIp is set on existing state
-      if (!state.clientIp) {
-        state.clientIp = clientIp;
+      // Filter by client ID and recent time
+      if (allSessions && allSessions.length > 0) {
+        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+        const userSession = allSessions.find((session) => {
+          const state = (session as any).state_jsonb || {};
+          const lastUpdated = new Date(session.updated_at);
+          return state.clientIp === clientId && lastUpdated > oneHourAgo;
+        });
+
+        if (userSession) {
+          sessionId = userSession.session_id;
+          console.log(`[Chat] Reusing existing session ${sessionId} for client ${clientId}`);
+        }
       }
-    } else {
-      // Create new session
+    }
+
+    // If still no sessionId, create a new session
+    if (!sessionId) {
       const { data: newSession, error: sessionError } = await supabase
         .from("chat_sessions")
         .insert({})
@@ -114,743 +83,473 @@ export async function POST(request: NextRequest) {
         .single();
 
       if (sessionError || !newSession) {
+        console.error("[Chat] Failed to create session:", sessionError);
         return NextResponse.json(
           { error: "Failed to create session" },
           { status: 500 }
         );
       }
 
-      const session = newSession as ChatSessionRow;
-      currentSessionId = session.id;
-      state = createInitialState(clientIp);
+      sessionId = (newSession as any).id;
+      console.log(`[Chat] Created new session: ${sessionId} for client ${clientId}`);
 
-      // Insert initial state with client IP
-      await supabase.from("chat_state").insert({
-        session_id: currentSessionId,
-        state_jsonb: state,
+      // Initialize empty chat state
+      const { error: insertError } = await supabase.from("chat_state").insert({
+        session_id: sessionId,
+        state_jsonb: {
+          phase: "initial",
+          messages: [],
+          selectedTopCategoryKey: null,
+          selectedSubcategoryKey: null,
+          studentInfo: { fullName: null, studentId: null, programme: null },
+          originalMessage: null,
+          candidateIssues: [],
+          selectedIssueKey: null,
+          currentQuestionIndex: 0,
+          collectedSlots: {},
+          clientIp: clientId,
+        },
+      });
+      
+      if (insertError) {
+        console.error("[Chat] Failed to insert chat state:", insertError);
+      }
+    }
+
+    // Handle start action (just return session ID and greeting)
+    if (actionType === "start" && !userMessage) {
+      console.log(`[Chat] Returning greeting for session ${sessionId}`);
+      
+      // Save the greeting message to the state
+      const supabase = createSupabaseClient();
+      const greetingMessage = "Hi there! I'm the Coventry Student Assistant. How can I help you today?";
+      
+      await supabase
+        .from("chat_state")
+        .update({
+          state_jsonb: {
+            phase: "initial",
+            messages: [
+              {
+                role: "assistant",
+                content: greetingMessage,
+                timestamp: new Date().toISOString(),
+              },
+            ],
+            selectedTopCategoryKey: null,
+            selectedSubcategoryKey: null,
+            studentInfo: { fullName: null, studentId: null, programme: null },
+            originalMessage: null,
+            candidateIssues: [],
+            selectedIssueKey: null,
+            currentQuestionIndex: 0,
+            collectedSlots: {},
+            clientIp: clientId,
+          },
+        })
+        .eq("session_id", sessionId);
+      
+      return NextResponse.json({
+        sessionId,
+        botMessages: [
+          {
+            role: "assistant",
+            content: greetingMessage,
+          },
+        ],
       });
     }
 
-    let response: ChatResponse;
+    // Handle category selection action
+    if (actionType === "selectCategory" && body.categoryKey) {
+      console.log(`[Chat] Category selected: ${body.categoryKey} for session ${sessionId}`);
+      
+      const supabase = createSupabaseClient();
+      
+      // Generate follow-up questions and response first
+      const followupQuestions = generateFollowupQuestions(body.categoryKey);
+      const categoryDisplay = body.categoryTitle || body.categoryKey.replace(/_/g, ' ');
+      const botResponse = `Great! I'll help you with ${categoryDisplay}. Let me ask a few questions to better understand your situation:\n\n${followupQuestions.map(q => `• ${q}`).join('\n')}`;
+      
+      // Update session state with selected category
+      const { data: stateData } = await supabase
+        .from("chat_state")
+        .select("state_jsonb")
+        .eq("session_id", sessionId)
+        .single();
 
-    switch (actionType) {
-      case "start":
-        response = handleStart(currentSessionId, state);
-        break;
-
-      case "selectCategory":
-        if (!categoryKey) {
-          return NextResponse.json(
-            { error: "categoryKey required for selectCategory action" },
-            { status: 400 }
-          );
-        }
-        response = await handleSelectCategory(
-          currentSessionId,
-          state,
-          categoryKey,
-          supabase
-        );
-        break;
-
-      case "submitStudentInfo":
-        if (!studentInfo) {
-          return NextResponse.json(
-            { error: "studentInfo required for submitStudentInfo action" },
-            { status: 400 }
-          );
-        }
-        response = await handleSubmitStudentInfo(
-          currentSessionId,
-          state,
-          studentInfo,
-          engine,
-          supabase
-        );
-        break;
-
-      case "selectSubcategory":
-        response = await handleSelectSubcategory(
-          currentSessionId,
-          state,
-          subcategoryKey || null,
-          engine,
-          supabase
-        );
-        break;
-
-      case "message":
-        if (!userMessage) {
-          return NextResponse.json(
-            { error: "userMessage required for message action" },
-            { status: 400 }
-          );
-        }
-        response = await handleMessage(
-          currentSessionId,
-          state,
-          userMessage,
-          engine,
-          supabase
-        );
-        break;
-
-      case "answer":
-        if (!answer) {
-          return NextResponse.json(
-            { error: "answer required for answer action" },
-            { status: 400 }
-          );
-        }
-        response = await handleAnswer(
-          currentSessionId,
-          state,
-          answer,
-          engine,
-          supabase
-        );
-        break;
-
-      case "confirm":
-        if (confirmed === undefined) {
-          return NextResponse.json(
-            { error: "confirmed required for confirm action" },
-            { status: 400 }
-          );
-        }
-        response = await handleConfirm(
-          currentSessionId,
-          state,
-          confirmed,
-          engine,
-          supabase
-        );
-        break;
-
-      default:
-        return NextResponse.json(
-          { error: "Invalid actionType" },
-          { status: 400 }
-        );
+      if (stateData) {
+        const state = (stateData as any).state_jsonb || {};
+        
+        // Update state with category selection AND bot response
+        await supabase
+          .from("chat_state")
+          .update({
+            state_jsonb: {
+              ...state,
+              selectedTopCategoryKey: body.categoryKey,
+              phase: "asking_followup",
+              messages: [
+                ...(state.messages || []),
+                { 
+                  role: "user", 
+                  content: `I need help with: ${body.categoryTitle || body.categoryKey}`, 
+                  timestamp: new Date().toISOString() 
+                },
+                {
+                  role: "assistant",
+                  content: botResponse,
+                  timestamp: new Date().toISOString(),
+                },
+              ],
+            },
+          })
+          .eq("session_id", sessionId);
+      }
+      
+      return NextResponse.json({
+        sessionId,
+        state: {
+          selectedTopCategoryKey: body.categoryKey,
+          phase: "asking_followup",
+        },
+        botMessages: [
+          {
+            role: "assistant",
+            content: botResponse,
+            followupQuestions,
+            requiresContext: true,
+          },
+        ],
+      });
     }
 
-    return NextResponse.json(response);
-  } catch (error) {
-    console.error("Chat API error:", error);
+    // Handle confirmation action (user confirmed or rejected the identified issue)
+    if (actionType === "confirmation" && userMessage) {
+      console.log(`[Chat] Confirmation received: ${userMessage} for session ${sessionId}`);
+      
+      const { data: stateData } = await supabase
+        .from("chat_state")
+        .select("state_jsonb")
+        .eq("session_id", sessionId)
+        .single();
+
+      if (stateData) {
+        const state = (stateData as any).state_jsonb || {};
+        
+        if (userMessage.toLowerCase().includes("yes")) {
+          // User confirmed - now proceed to email generation
+          console.log(`[Chat] Generating email for category: ${state.selectedTopCategoryKey}`);
+          
+          // Build the message from conversation history
+          const conversationText = (state.messages || [])
+            .filter((m: any) => m.role === "user")
+            .map((m: any) => m.content)
+            .join("\\n");
+          
+          const emailResponse = await fetch(`${BACKEND_URL}/api/email/generate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: state.studentInfo?.fullName || "Student",
+              studentId: state.studentInfo?.studentId || "Unknown",
+              email: state.studentInfo?.email || "",
+              course: state.studentInfo?.programme || "",
+              yearOfStudy: "",
+              message: conversationText || `I need help with ${state.selectedTopCategoryKey}`,
+              sessionId: sessionId,
+              additionalContext: {
+                category: state.selectedTopCategoryKey,
+                issue: state.selectedIssueKey,
+              }
+            }),
+          });
+
+          console.log(`[Chat] Email generation response status: ${emailResponse.status}`);
+          let emailContent = "Unable to generate email";
+          let emailGenerated = false;
+
+          if (emailResponse.ok) {
+            const emailData = await emailResponse.json();
+            console.log(`[Chat] Email data:`, emailData);
+            // Backend returns formattedEmail which is the display-ready email
+            emailContent = emailData.formattedEmail || emailData.template?.body || emailData.data?.emailContent || emailData.emailContent || emailContent;
+            emailGenerated = true;
+          } else {
+            const errorText = await emailResponse.text();
+            console.error(`[Chat] Email generation failed:`, errorText);
+            emailContent = `Email generation failed. Please contact support with your issue about ${state.selectedTopCategoryKey}.`;
+          }
+
+          const emailDraftMessage = `Perfect! Here's the email draft:\n\n${emailContent}\n\nYou can copy this and send it to the appropriate department.`;
+
+          // Update state to completion phase
+          await supabase
+            .from("chat_state")
+            .update({
+              state_jsonb: {
+                ...state,
+                phase: "completed",
+                emailGenerated,
+                emailContent,
+                messages: [
+                  ...(state.messages || []),
+                  { 
+                    role: "user", 
+                    content: userMessage, 
+                    timestamp: new Date().toISOString() 
+                  },
+                  {
+                    role: "assistant",
+                    content: emailDraftMessage,
+                    timestamp: new Date().toISOString(),
+                  },
+                ],
+              },
+            })
+            .eq("session_id", sessionId);
+
+          return NextResponse.json({
+            sessionId,
+            botMessages: [
+              {
+                role: "assistant",
+                content: emailDraftMessage,
+                emailGenerated: true,
+                emailContent,
+              },
+            ],
+            state: { phase: "completed" },
+          });
+        } else {
+          // User wants to clarify - continue conversation
+          const clarifyMessage = "No problem! Let me ask more questions to better understand your situation. What additional details can you provide?";
+          
+          await supabase
+            .from("chat_state")
+            .update({
+              state_jsonb: {
+                ...state,
+                phase: "asking_followup",
+                messages: [
+                  ...(state.messages || []),
+                  { 
+                    role: "user", 
+                    content: userMessage, 
+                    timestamp: new Date().toISOString() 
+                  },
+                  {
+                    role: "assistant",
+                    content: clarifyMessage,
+                    timestamp: new Date().toISOString(),
+                  },
+                ],
+              },
+            })
+            .eq("session_id", sessionId);
+
+          return NextResponse.json({
+            sessionId,
+            botMessages: [
+              {
+                role: "assistant",
+                content: clarifyMessage,
+              },
+            ],
+            state: { phase: "asking_followup" },
+          });
+        }
+      }
+
+      return NextResponse.json(
+        { error: "Session not found" },
+        { status: 404 }
+      );
+    }
+
+    // Handle message action (forward to backend)
+    if (userMessage) {
+      console.log(`[Chat] Forwarding message to backend: "${userMessage.substring(0, 50)}..."`);
+      
+      // First, get current state to include conversation context
+      const { data: stateData } = await supabase
+        .from("chat_state")
+        .select("state_jsonb")
+        .eq("session_id", sessionId)
+        .single();
+
+      const state = (stateData as any).state_jsonb || {};
+      const messages = state.messages || [];
+      const selectedCategory = state.selectedTopCategoryKey;
+      
+      // Build conversation context for backend
+      const conversationContext = messages
+        .slice(-10) // Last 10 messages for context
+        .map((msg: any) => `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`)
+        .join("\n");
+
+      const backendResponse = await fetch(`${BACKEND_URL}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: userMessage,
+          conversationId: sessionId,
+          stream: false,
+          context: conversationContext,
+          category: selectedCategory,
+        }),
+      });
+
+      if (!backendResponse.ok) {
+        const errorText = await backendResponse.text();
+        console.error("[Chat] Backend error:", backendResponse.status, errorText);
+        return NextResponse.json({
+          sessionId,
+          botMessages: [
+            {
+              role: "assistant",
+              content: "I'm having trouble understanding. Could you try asking your question in a different way?",
+            },
+          ],
+        });
+      }
+
+      const backendData = await backendResponse.json();
+      const aiResponse = backendData.data?.message || backendData.message || "No response";
+      const classification = backendData.data?.classification || "general";
+      const sources = backendData.data?.sources || [];
+      
+      console.log(`[Chat] Got backend response: "${aiResponse.substring(0, 50)}..." (classification: ${classification})`);
+
+      // Check if this response warrants a confirmation (issue identified)
+      const shouldShowConfirmation = selectedCategory && classification !== "general" && aiResponse.length > 50;
+
+      // Save message to session state with metadata
+      if (sessionId) {
+        const updatedMessages = [
+          ...messages,
+          { role: "user", content: userMessage, timestamp: new Date().toISOString() },
+          { 
+            role: "assistant", 
+            content: aiResponse, 
+            timestamp: new Date().toISOString(),
+            classification,
+            sources,
+          }
+        ];
+
+        const newState = {
+          ...state,
+          messages: updatedMessages,
+          originalMessage: userMessage,
+          phase: shouldShowConfirmation ? "confirming" : "asking_followup",
+        };
+
+        if (classification && classification !== "general") {
+          newState.selectedIssueKey = classification;
+        }
+
+        const { error: updateError } = await supabase
+          .from("chat_state")
+          .update({ state_jsonb: newState })
+          .eq("session_id", sessionId);
+
+        if (updateError) {
+          console.error("[Chat] Error saving state:", updateError);
+        }
+      }
+
+      // Build response with conditional confirmation
+      const botMessage: any = {
+        role: "assistant",
+        content: aiResponse,
+        classification,
+        sources,
+      };
+
+      // Only show confirmation if category was selected and issue was identified
+      if (shouldShowConfirmation) {
+        botMessage.confirmationNeeded = true;
+        botMessage.confirmationOptions = [
+          { id: "yes", label: "Yes, that's correct", value: "yes" },
+          { id: "no", label: "No, let me clarify", value: "no" },
+        ];
+      }
+
+      return NextResponse.json({
+        sessionId,
+        botMessages: [botMessage],
+        state: {
+          phase: shouldShowConfirmation ? "confirming" : "asking_followup",
+          messageCount: messages.length + 1,
+        },
+      });
+    }
+
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: "No message provided" },
+      { status: 400 }
+    );
+  } catch (error) {
+    console.error("[Chat] Error:", error);
+    return NextResponse.json(
+      { error: "Internal server error", message: String(error) },
       { status: 500 }
     );
   }
 }
 
-// Handle start action - request student info
-function handleStart(
-  sessionId: string,
-  state: ChatState
-): ChatResponse {
-  // Transition to student_info phase
-  state.phase = "student_info";
-
-  return {
-    sessionId,
-    botMessages: [
-      {
-        role: "assistant",
-        content: "Let's start by collecting some basic information.",
-      },
+// Helper function to generate follow-up questions based on category
+function generateFollowupQuestions(categoryKey: string): string[] {
+  const questionMap: Record<string, string[]> = {
+    course_enrollment: [
+      "What course or programme are you trying to enroll in?",
+      "Are you having trouble with the enrollment system or do you have questions about the application process?",
+      "What is your student ID or email address?",
     ],
-    studentInfoRequest: {
-      fields: ["fullName", "studentId", "programme"],
-    },
-  };
-}
-
-// Handle category selection
-async function handleSelectCategory(
-  sessionId: string,
-  state: ChatState,
-  categoryKey: string,
-  supabase: SupabaseClient
-): Promise<ChatResponse> {
-  // Update state with selected category
-  state.selectedTopCategoryKey = categoryKey === "not_sure" ? null : categoryKey;
-  state.phase = "student_info";
-
-  // Get category name for confirmation message
-  let categoryName = "any category";
-  if (categoryKey !== "not_sure") {
-    const { data: categoryNode } = await supabase
-      .from("issue_nodes")
-      .select("title")
-      .eq("key", categoryKey)
-      .single();
-
-    if (categoryNode) {
-      const node = categoryNode as { title: string };
-      categoryName = node.title;
-    }
-  }
-
-  const botMessage =
-    categoryKey === "not_sure"
-      ? "Great! Let's start by collecting some basic information."
-      : `Great! I'll help you with ${categoryName}. First, let's collect some basic information.`;
-
-  state = addMessage(state, "assistant", botMessage);
-
-  await saveState(supabase, sessionId, state);
-
-  return {
-    sessionId,
-    botMessages: [{ role: "assistant", content: botMessage }],
-    studentInfoRequest: {
-      fields: ["fullName", "studentId", "programme"],
-    },
-  };
-}
-
-// Handle student info submission
-async function handleSubmitStudentInfo(
-  sessionId: string,
-  state: ChatState,
-  studentInfo: { fullName: string; studentId: string; programme: string },
-  engine: DiagnosisEngine,
-  supabase: SupabaseClient
-): Promise<ChatResponse> {
-  // Store student info in state
-  state.studentInfo = studentInfo;
-  state.phase = "subcategory_select";
-
-  const botMessage = `Thank you, ${studentInfo.fullName}! Now, which specific area does your issue relate to?`;
-  state = addMessage(state, "assistant", botMessage);
-
-  // Fetch subcategories for the selected top category
-  let subcategoryOptions: {
-    id: string;
-    key: string;
-    title: string;
-    description: string | null;
-  }[] = [];
-
-  if (state.selectedTopCategoryKey) {
-    const { data: subcategories, error } = await supabase
-      .from("issue_nodes")
-      .select("id, key, title, description")
-      .eq("parent_key", state.selectedTopCategoryKey)
-      .order("sort_order");
-
-    console.log(`[Chat] Subcategory fetch for parent="${state.selectedTopCategoryKey}": ${subcategories?.length || 0} results`, error ? `Error: ${error.message}` : '');
-
-    if (subcategories && subcategories.length > 0) {
-      subcategoryOptions = subcategories as typeof subcategoryOptions;
-    }
-  }
-
-  // AUTO-SKIP: If no subcategories, proceed directly to questions
-  if (subcategoryOptions.length === 0) {
-    console.log('[Chat] No subcategories found, auto-skipping to questions');
-    return await handleSelectSubcategory(
-      sessionId,
-      state,
-      null,
-      engine,
-      supabase
-    );
-  }
-
-  await saveState(supabase, sessionId, state);
-
-  return {
-    sessionId,
-    botMessages: [{ role: "assistant", content: botMessage }],
-    subcategoryOptions,
-  };
-}
-
-// Handle subcategory selection
-async function handleSelectSubcategory(
-  sessionId: string,
-  state: ChatState,
-  subcategoryKey: string | null,
-  engine: DiagnosisEngine,
-  supabase: SupabaseClient
-): Promise<ChatResponse> {
-  // Store subcategory (empty string means skip/no filter)
-  state.selectedSubcategoryKey = subcategoryKey || null;
-  state.phase = "questioning";
-  state.currentQuestionIndex = 0;
-
-  // Determine which node to use for questions - subcategory or top category
-  const questionNodeKey = subcategoryKey || state.selectedTopCategoryKey;
-
-  // Try to get DB questions first
-  let questions: any[] = [];
-  if (questionNodeKey) {
-    // First, try to get questions from question_nodes for this specific node
-    const { data: dbQuestions, error } = await supabase
-      .from("question_nodes")
-      .select("*")
-      .eq("issue_key", questionNodeKey)
-      .order("order_index");
-
-    console.log(`[Chat] DB question fetch for issue_key="${questionNodeKey}": ${dbQuestions?.length || 0} results`, error ? `Error: ${error.message}` : '');
-
-    if (dbQuestions && dbQuestions.length > 0) {
-      questions = dbQuestions;
-      // Store the actual issue key for later use
-      state.selectedIssueKey = questionNodeKey;
-    }
-  }
-
-  // If no DB questions, use LLM stub
-  if (questions.length === 0) {
-    const { planQuestionsForIssue } = await import("@/lib/diagnosis/llm-question-planner");
-    const planned = await planQuestionsForIssue(
-      state.selectedTopCategoryKey || "general",
-      subcategoryKey
-    );
-
-    // CRITICAL FIX: Store the actual node key for contact/source_url fetch
-    // Use subcategory if available, otherwise top category
-    const actualIssueKey = questionNodeKey || state.selectedTopCategoryKey || "general";
-    state.selectedIssueKey = actualIssueKey;
-
-    // Store planned questions in state with reference to actual issue key
-    questions = planned.questions.map((q, idx) => ({
-      id: `planned-${idx}`,
-      issue_key: actualIssueKey, // Use actual key, not "planned_" prefix
-      order_index: idx,
-      question_text: q.questionText,
-      type: q.type,
-      options: q.options || null,
-      slot_key: q.slotKey || null,
-    }));
-
-    console.log(`[Chat] Using LLM-planned questions (${questions.length} questions) for issue_key="${actualIssueKey}"`);
-  }
-
-  // Get first question
-  const firstQuestion = questions[0];
-
-  if (!firstQuestion) {
-    // No questions available, proceed to confirmation
-    return await proceedToConfirmation(sessionId, state, engine, supabase);
-  }
-
-  const botMessage = firstQuestion.question_text;
-  state = addMessage(state, "assistant", botMessage);
-
-  // Store questions temporarily in state (we'll need them for the answer handler)
-  // Note: This is a simplification - in production, you might store this differently
-  (state as any).plannedQuestions = questions;
-
-  await saveState(supabase, sessionId, state);
-
-  const response: ChatResponse = {
-    sessionId,
-    botMessages: [{ role: "assistant", content: botMessage }],
-  };
-
-  if (firstQuestion.type === "single" && firstQuestion.options) {
-    response.quickReplies = firstQuestion.options;
-  } else if (firstQuestion.type === "text") {
-    response.slotRequest = {
-      slotKeys: firstQuestion.slot_key ? [firstQuestion.slot_key] : [],
-      hints: firstQuestion.slot_key
-        ? { [firstQuestion.slot_key]: firstQuestion.question_text }
-        : {},
-    };
-  }
-
-  return response;
-}
-
-// Handle user message - classify and start questioning
-async function handleMessage(
-  sessionId: string,
-  state: ChatState,
-  userMessage: string,
-  engine: DiagnosisEngine,
-  supabase: SupabaseClient
-): Promise<ChatResponse> {
-  // Add user message to state
-  state = addMessage(state, "user", userMessage);
-  state.originalMessage = userMessage;
-  state.phase = "questioning";
-
-  // Classify the message (with optional category and subcategory filtering)
-  const candidates = await engine.classifier.classify(
-    userMessage,
-    state.selectedTopCategoryKey,
-    state.selectedSubcategoryKey
-  );
-
-  if (candidates.length === 0) {
-    // No matches found
-    state = addMessage(
-      state,
-      "assistant",
-      "I couldn't identify a specific issue from your message. Could you please provide more details about your problem?"
-    );
-
-    await saveState(supabase, sessionId, state);
-
-    return {
-      sessionId,
-      botMessages: [
-        {
-          role: "assistant",
-          content:
-            "I couldn't identify a specific issue from your message. Could you please provide more details about your problem?",
-        },
-      ],
-    };
-  }
-
-  // Store candidates and select the top one
-  state.candidateIssues = candidates;
-  state.selectedIssueKey = candidates[0].key;
-  state.phase = "questioning";
-  state.currentQuestionIndex = 0;
-
-  // Get first question
-  const question = await engine.questionPlanner.nextQuestion(
-    candidates[0].key,
-    0
-  );
-
-  if (!question) {
-    // No questions, go straight to confirmation
-    return await proceedToConfirmation(sessionId, state, engine, supabase);
-  }
-
-  const botMessage = `I think you need help with: **${candidates[0].title}**\n\n${question.text}`;
-  state = addMessage(state, "assistant", botMessage);
-
-  await saveState(supabase, sessionId, state);
-
-  const response: ChatResponse = {
-    sessionId,
-    botMessages: [{ role: "assistant", content: botMessage }],
-  };
-
-  if (question.type === "single" && question.options) {
-    response.quickReplies = question.options;
-  } else if (question.type === "text") {
-    response.slotRequest = {
-      slotKeys: question.slotKey ? [question.slotKey] : [],
-      hints: question.slotKey
-        ? { [question.slotKey]: question.text }
-        : {},
-    };
-  }
-
-  return response;
-}
-
-// Handle answer to a question
-async function handleAnswer(
-  sessionId: string,
-  state: ChatState,
-  answer: { type: "quickReply" | "text"; value: string },
-  engine: DiagnosisEngine,
-  supabase: SupabaseClient
-): Promise<ChatResponse> {
-  if (!state.selectedIssueKey) {
-    return {
-      sessionId,
-      botMessages: [
-        {
-          role: "assistant",
-          content: "Please describe your issue first.",
-        },
-      ],
-    };
-  }
-
-  // Record the answer
-  state = addMessage(state, "user", answer.value);
-
-  // Check if we have planned questions in state
-  const plannedQuestions = (state as any).plannedQuestions;
-
-  let currentQuestion: any;
-  let nextQuestion: any;
-
-  if (plannedQuestions && plannedQuestions.length > 0) {
-    // Use planned questions
-    currentQuestion = plannedQuestions[state.currentQuestionIndex];
-    nextQuestion = plannedQuestions[state.currentQuestionIndex + 1] || null;
-  } else {
-    // Use DB questions via question planner
-    currentQuestion = await engine.questionPlanner.nextQuestion(
-      state.selectedIssueKey!,
-      state.currentQuestionIndex
-    );
-
-    // Move to next question
-    state.currentQuestionIndex++;
-
-    nextQuestion = await engine.questionPlanner.nextQuestion(
-      state.selectedIssueKey!,
-      state.currentQuestionIndex
-    );
-  }
-
-  if (currentQuestion?.slot_key) {
-    state.collectedSlots[currentQuestion.slot_key] = answer.value;
-  }
-
-  // Move to next question index if using planned questions
-  if (plannedQuestions) {
-    state.currentQuestionIndex++;
-  }
-
-  if (!nextQuestion) {
-    // No more questions, proceed to confirmation
-    return await proceedToConfirmation(sessionId, state, engine, supabase);
-  }
-
-  // Get question text (different field names for planned vs DB questions)
-  const questionText = nextQuestion.question_text || nextQuestion.text;
-  const slotKey = nextQuestion.slot_key || nextQuestion.slotKey;
-
-  const botMessage = questionText;
-  state = addMessage(state, "assistant", botMessage);
-
-  await saveState(supabase, sessionId, state);
-
-  const response: ChatResponse = {
-    sessionId,
-    botMessages: [{ role: "assistant", content: botMessage }],
-  };
-
-  if (nextQuestion.type === "single" && nextQuestion.options) {
-    response.quickReplies = nextQuestion.options;
-  } else if (nextQuestion.type === "text") {
-    response.slotRequest = {
-      slotKeys: slotKey ? [slotKey] : [],
-      hints: slotKey ? { [slotKey]: questionText } : {},
-    };
-  }
-
-  return response;
-}
-
-// Proceed to confirmation phase
-async function proceedToConfirmation(
-  sessionId: string,
-  state: ChatState,
-  engine: DiagnosisEngine,
-  supabase: SupabaseClient
-): Promise<ChatResponse> {
-  state.phase = "confirming";
-
-  // Get answers from user messages
-  const userAnswers = state.messages
-    .filter((m) => m.role === "user")
-    .map((m) => m.content)
-    .slice(1); // Skip original message
-
-  const summary = await engine.summariser.summarise(
-    state.selectedIssueKey!,
-    state.collectedSlots,
-    userAnswers
-  );
-
-  const botMessage = `${summary}\n\nIs this correct?`;
-  state = addMessage(state, "assistant", botMessage);
-
-  await saveState(supabase, sessionId, state);
-
-  return {
-    sessionId,
-    botMessages: [{ role: "assistant", content: botMessage }],
-    quickReplies: [
-      { id: "yes", label: "Yes, that's correct", value: "yes" },
-      { id: "no", label: "No, let me clarify", value: "no" },
+    course_change: [
+      "Which course are you currently enrolled in?",
+      "What course do you want to change to?",
+      "What is your reason for changing courses?",
+    ],
+    academic_support: [
+      "What subject or module are you having difficulty with?",
+      "Have you attended the relevant module sessions?",
+      "What specific topics do you need help with?",
+    ],
+    accommodation: [
+      "Are you looking for on-campus or off-campus accommodation?",
+      "What is your budget range?",
+      "Do you have any specific location preferences?",
+    ],
+    fees_payment: [
+      "What is your query related to? (tuition fees, payment plan, refund, etc.)",
+      "Have you already set up a payment plan?",
+      "When do you need this resolved?",
+    ],
+    attendance_issue: [
+      "Which module or course is this related to?",
+      "How many sessions have you missed?",
+      "What is the reason for your absence?",
+    ],
+    graduation: [
+      "When are you expecting to graduate?",
+      "Have you completed all your modules?",
+      "Do you have any outstanding academic requirements?",
+    ],
+    career_support: [
+      "What type of career support do you need? (CV, interview prep, job search, etc.)",
+      "What field or industry are you interested in?",
+      "Are you looking for internship or graduate positions?",
     ],
   };
+
+  return questionMap[categoryKey] || [
+    "Could you provide more details about your situation?",
+    "What have you already tried?",
+    "When do you need this resolved?",
+  ];
 }
 
-// Handle confirmation
-async function handleConfirm(
-  sessionId: string,
-  state: ChatState,
-  confirmed: boolean,
-  engine: DiagnosisEngine,
-  supabase: SupabaseClient
-): Promise<ChatResponse> {
-  if (!confirmed) {
-    // Reset to subcategory selection phase
-    state.phase = "subcategory_select";
-    state.currentQuestionIndex = 0;
-    state.collectedSlots = {};
-    state.selectedSubcategoryKey = null;
 
-    const botMessage =
-      "No problem! Let's clarify your issue. Please select a category or skip to continue.";
-    state = addMessage(state, "assistant", botMessage);
 
-    // Fetch subcategories again
-    let subcategoryOptions: {
-      id: string;
-      key: string;
-      title: string;
-      description: string | null;
-    }[] = [];
-
-    if (state.selectedTopCategoryKey) {
-      const { data: subcategories, error } = await supabase
-        .from("issue_nodes")
-        .select("id, key, title, description")
-        .eq("parent_key", state.selectedTopCategoryKey)
-        .order("sort_order");
-
-      console.log(`[Chat] Rejection flow - Subcategory fetch for parent="${state.selectedTopCategoryKey}": ${subcategories?.length || 0} results`, error ? `Error: ${error.message}` : '');
-
-      if (subcategories && subcategories.length > 0) {
-        subcategoryOptions = subcategories as typeof subcategoryOptions;
-      }
-    }
-
-    // AUTO-SKIP: If no subcategories, proceed directly to questions (same as submitStudentInfo)
-    if (subcategoryOptions.length === 0) {
-      console.log('[Chat] Rejection flow - No subcategories found, auto-skipping to questions');
-      return await handleSelectSubcategory(
-        sessionId,
-        state,
-        null,
-        engine,
-        supabase
-      );
-    }
-
-    await saveState(supabase, sessionId, state);
-
-    return {
-      sessionId,
-      botMessages: [{ role: "assistant", content: botMessage }],
-      subcategoryOptions,
-    };
-  }
-
-  // User confirmed - generate result
-  state.phase = "complete";
-
-  console.log(`[Chat] Generating result for issue_key="${state.selectedIssueKey}"`);
-
-  // Prepare student info for email drafter
-  const studentInfoForEmail = state.studentInfo.fullName
-    ? {
-        fullName: state.studentInfo.fullName,
-        studentId: state.studentInfo.studentId || "",
-        programme: state.studentInfo.programme || "",
-      }
-    : undefined;
-
-  // Include original message in slots for email generation if available
-  const slotsForEmail = { ...state.collectedSlots };
-  if (state.originalMessage && !slotsForEmail.description && !slotsForEmail.what) {
-    // Add the original user message as description for email context
-    slotsForEmail.original_problem = state.originalMessage;
-  }
-  
-  console.log(`[Chat] Slots for email drafter:`, slotsForEmail);
-
-  const [contact, emailDraft, summary, issueVariant] = await Promise.all([
-    engine.contactProvider.getContact(state.selectedIssueKey!),
-    engine.emailDrafter.draft(
-      state.selectedIssueKey!,
-      slotsForEmail,
-      studentInfoForEmail
-    ),
-    engine.summariser.summarise(
-      state.selectedIssueKey!,
-      state.collectedSlots,
-      []
-    ),
-    // Fetch source URL from issue variant
-    supabase
-      .from("issue_variants")
-      .select("source_url")
-      .eq("key", state.selectedIssueKey!)
-      .single(),
-  ]);
-
-  // DEBUG: Log contact fetch result with details
-  if (contact) {
-    console.log(`[Chat] ✅ Contact found:`, {
-      department: contact.departmentName,
-      emails: contact.emails,
-      phones: contact.phones,
-      links: contact.links,
-      hoursText: contact.hoursText
-    });
-  } else {
-    console.warn(`[Chat] ⚠️ No contact found for issue_key="${state.selectedIssueKey}"`);
-    console.log(`[Chat] This may be normal if:
-    1. No contact exists in DB for this issue_key
-    2. RLS policy blocking access (check migration 004)
-    3. All contacts filtered as placeholders`);
-  }
-
-  // DEBUG: Log source URL fetch result
-  if (issueVariant.error) {
-    console.error(`[Chat] ❌ Source URL fetch error for key="${state.selectedIssueKey}":`, issueVariant.error.message);
-  } else if (issueVariant.data?.source_url) {
-    console.log(`[Chat] ✅ Source URL found: ${issueVariant.data.source_url}`);
-  } else {
-    console.warn(`[Chat] ⚠️ No source_url for issue_key="${state.selectedIssueKey}"`);
-    console.log(`[Chat] Consider adding source_url to this issue_variant in the database`);
-  }
-
-  // Extract source URLs (filter out nulls)
-  const sourceUrls: string[] = [];
-  if (issueVariant.data?.source_url) {
-    sourceUrls.push(issueVariant.data.source_url);
-  }
-
-  const botMessage =
-    "Great! Here's the information you need to resolve your issue:";
-  state = addMessage(state, "assistant", botMessage);
-
-  await saveState(supabase, sessionId, state);
-
-  return {
-    sessionId,
-    botMessages: [{ role: "assistant", content: botMessage }],
-    result: {
-      issueKey: state.selectedIssueKey!,
-      summary,
-      slots: state.collectedSlots,
-      studentInfo: studentInfoForEmail || {
-        fullName: "",
-        studentId: "",
-        programme: "",
-      },
-      sourceUrls,
-      contact: contact || {
-        departmentName: "Student Services",
-        emails: [],
-        phones: [],
-        hoursText: "",
-        links: [],
-      },
-      emailDraft,
-    },
-  };
-}
-
-// Save state to Supabase
-async function saveState(
-  supabase: SupabaseClient,
-  sessionId: string,
-  state: ChatState
-) {
-  await supabase
-    .from("chat_state")
-    .update({ state_jsonb: state })
-    .eq("session_id", sessionId);
-}

@@ -17,8 +17,8 @@ import { LLMSummariser } from "./llm/summariser";
 
 export function createDiagnosisEngine(
   supabase: SupabaseClient,
-  diagnosisMode: DiagnosisEngineMode = "rule",
-  drafterMode: "template" | "llm" = "template"
+  diagnosisMode: DiagnosisEngineMode = "llm",
+  drafterMode: "template" | "llm" = "llm"
 ): DiagnosisEngine {
   // Classifier based on diagnosis mode
   const classifier =

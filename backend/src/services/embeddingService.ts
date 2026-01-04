@@ -1,40 +1,15 @@
 import { config, generateOllamaEmbedding } from '../config';
 
-// Conditionally import OpenAI only if needed
-let openai: any = null;
-const MODELS = { EMBEDDING: 'text-embedding-3-small' };
-
-if (config.LLM_PROVIDER === 'openai' && config.OPENAI_API_KEY) {
-  import('openai').then((OpenAI) => {
-    openai = new OpenAI.default({ apiKey: config.OPENAI_API_KEY });
-  });
-}
-
-// Embedding dimensions vary by model
-export const EMBEDDING_DIMENSIONS = config.OLLAMA_EMBEDDING_MODEL ? 768 : 1536;
+// Embedding dimensions for Ollama
+export const EMBEDDING_DIMENSIONS = 768;
 
 /**
  * Generate embeddings for a single text
- * Uses Ollama for embeddings (since llama.cpp doesn't support them)
- * Falls back to OpenAI if configured
+ * Uses Ollama for embeddings
  */
 export async function generateEmbedding(text: string): Promise<number[]> {
-  // Use Ollama for embeddings (works with any chat provider)
-  if (config.OLLAMA_EMBEDDING_MODEL) {
-    return generateOllamaEmbedding(text);
-  }
-  
-  // Fallback to OpenAI
-  if (!openai) {
-    throw new Error('OpenAI client not initialized. Check your API key.');
-  }
-  
-  const response = await openai.embeddings.create({
-    model: MODELS.EMBEDDING,
-    input: text,
-  });
-  
-  return response.data[0].embedding;
+  // Use Ollama for embeddings
+  return generateOllamaEmbedding(text);
 }
 
 /**
@@ -44,7 +19,7 @@ export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
   const embeddings: number[][] = [];
   
   // Process in smaller batches for stability
-  const batchSize = config.LLM_PROVIDER === 'ollama' ? 10 : 100;
+  const batchSize = 10;
   
   for (let i = 0; i < texts.length; i += batchSize) {
     const batch = texts.slice(i, i + batchSize);

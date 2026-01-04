@@ -36,6 +36,11 @@ CREATE POLICY "Allow anonymous update on chat_sessions"
   TO anon
   USING (true);
 
+CREATE POLICY "Allow anonymous delete on chat_sessions"
+  ON chat_sessions FOR DELETE
+  TO anon
+  USING (true);
+
 -- Chat state: Allow all operations
 CREATE POLICY "Allow anonymous insert on chat_state"
   ON chat_state FOR INSERT
@@ -49,6 +54,11 @@ CREATE POLICY "Allow anonymous select on chat_state"
 
 CREATE POLICY "Allow anonymous update on chat_state"
   ON chat_state FOR UPDATE
+  TO anon
+  USING (true);
+
+CREATE POLICY "Allow anonymous delete on chat_state"
+  ON chat_state FOR DELETE
   TO anon
   USING (true);
 

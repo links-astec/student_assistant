@@ -73,13 +73,52 @@ export class TemplateEmailDrafter implements IEmailDrafter {
     // Replace {{key}} patterns with slot values
     for (const [key, value] of Object.entries(slots)) {
       const placeholder = new RegExp(`\\{\\{${key}\\}\\}`, "g");
-      result = result.replace(placeholder, value || `[${key}]`);
+      result = result.replace(placeholder, value || this.getDefaultValue(key));
     }
 
-    // Replace any remaining placeholders with bracketed key names
-    result = result.replace(/\{\{(\w+)\}\}/g, "[$1]");
+    // Replace any remaining placeholders with meaningful defaults
+    result = result.replace(/\{\{(\w+)\}\}/g, (match, key) => this.getDefaultValue(key));
 
     return result;
+  }
+
+  private getDefaultValue(key: string): string {
+    const defaults: Record<string, string> = {
+      // Student info defaults
+      student_name: "Student",
+      student_id: "Your Student ID",
+      programme: "your programme",
+      course: "your course",
+      year: "your year of study",
+
+      // Problem description defaults
+      what: "the matter I'm contacting you about",
+      description: "my inquiry",
+      problem_details: "the issue I'm experiencing",
+      specific_question: "my question",
+
+      // Time/location defaults
+      when: "recently",
+      urgency: "as soon as possible",
+      urgency_or_deadline: "as soon as possible",
+      where: "Coventry University",
+      location: "the university",
+
+      // Reason defaults
+      why: "it affects my studies",
+      impact: "it affects my ability to study effectively",
+
+      // Action defaults
+      how: "I would appreciate your guidance",
+      tried: "I haven't tried anything yet",
+      details: "I need assistance with this matter",
+
+      // Contact defaults
+      contact_details: "my student email",
+      phone: "my contact details if needed",
+    };
+
+    return defaults[key] || `[${key.replace(/_/g, ' ')}]`;
   }
 
   private generateStudentIntro(studentInfo: StudentInfo): string {
@@ -96,21 +135,26 @@ I am ${studentInfo.fullName}, Student ID: ${studentInfo.studentId}, from ${stude
       ? this.generateStudentIntro(studentInfo)
       : `Dear Team,
 
-I am ${slots.student_name || "[Your Name]"}, Student ID: ${slots.student_id || "[Your Student ID]"}.`;
+I am ${slots.student_name || "a student"}, Student ID: ${slots.student_id || "my student ID"}.`;
+
+    const problem = slots.what || slots.description || slots.problem_details || "an issue I need assistance with";
+    const when = slots.when || slots.urgency_or_deadline || "as soon as possible";
+    const where = slots.where || "at Coventry University";
+    const why = slots.why || "it affects my studies";
+    const how = slots.how || slots.tried || "I would appreciate your guidance on how to resolve this";
 
     return `${intro}
 
-**WHAT:** I am writing regarding an inquiry.
+I am writing regarding ${problem}.
 
-**WHEN:** ${slots.urgency_or_deadline || "[Please specify timeline]"}
+When: ${when}
+Where: ${where}
+Why: ${why}
+How: ${how}
 
-**WHERE:** [Location if applicable]
-
-**WHY:** [Reason for inquiry]
-
-**HOW:** Please advise on next steps.
+I would be grateful for your assistance with this matter.
 
 Best regards,
-${studentInfo?.fullName || slots.student_name || "[Your Name]"}`;
+${studentInfo?.fullName || slots.student_name || "Student"}`;
   }
 }

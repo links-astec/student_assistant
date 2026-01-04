@@ -1,8 +1,32 @@
 {
   "rewrites": [
     {
-      "source": "/api/:path*",
-      "destination": "https://campusflow-backend.vercel.app/api/:path*"
+      "source": "/api/chat/:path*",
+      "destination": "https://backend-sand-alpha-67.vercel.app/api/chat/:path*"
+    },
+    {
+      "source": "/api/chats/:path*",
+      "destination": "https://backend-sand-alpha-67.vercel.app/api/chats/:path*"
+    },
+    {
+      "source": "/api/search/:path*",
+      "destination": "https://backend-sand-alpha-67.vercel.app/api/search/:path*"
+    },
+    {
+      "source": "/api/email/:path*",
+      "destination": "https://backend-sand-alpha-67.vercel.app/api/email/:path*"
+    },
+    {
+      "source": "/api/feedback/:path*",
+      "destination": "https://backend-sand-alpha-67.vercel.app/api/feedback/:path*"
+    },
+    {
+      "source": "/api/tracking/:path*",
+      "destination": "https://backend-sand-alpha-67.vercel.app/api/tracking/:path*"
+    },
+    {
+      "source": "/api/health",
+      "destination": "https://backend-sand-alpha-67.vercel.app/api/health"
     },
     {
       "source": "/(.*)",

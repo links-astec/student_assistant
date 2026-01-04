@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { getFetchOptions } from "@/lib/deviceId";
 
 interface ChatSummary {
   sessionId: string;
@@ -37,14 +38,19 @@ export default function ChatHistoryModal({
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch("/api/chats");
-      if (!response.ok) throw new Error("Failed to fetch chats");
+      const response = await fetch("/api/chats", getFetchOptions());
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || "Failed to fetch chats");
+      }
       const data = await response.json();
+      console.log("[ChatHistory] Loaded chats:", data);
       setChats(data.chats || []);
       setVisibleCount(10); // Reset visible count on fetch
     } catch (err) {
-      setError("Failed to load chat history");
-      console.error(err);
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.error("[ChatHistory] Error loading chats:", errorMsg);
+      setError(errorMsg);
     } finally {
       setLoading(false);
     }
@@ -56,14 +62,32 @@ export default function ChatHistoryModal({
 
     setDeletingId(sessionId);
     try {
-      const response = await fetch(`/api/chats?sessionId=${sessionId}`, {
+      const response = await fetch(`/api/chats?sessionId=${sessionId}`, getFetchOptions({
         method: "DELETE",
-      });
-      if (!response.ok) throw new Error("Failed to delete");
-      setChats((prev) => prev.filter((c) => c.sessionId !== sessionId));
+      }));
+      const responseData = await response.text().catch(() => "");
+      console.log(`[ChatHistory] Delete response status: ${response.status}`, responseData);
+      
+      if (!response.ok) {
+        throw new Error(`Delete failed: ${response.status} ${responseData}`);
+      }
+      
+      // If this was the current session, clear it from localStorage
+      if (localStorage.getItem("chatSessionId") === sessionId) {
+        localStorage.removeItem("chatSessionId");
+        // If user deleted current session, reload page to start fresh
+        window.location.href = '/';
+        return;
+      }
+      
+      console.log(`[ChatHistory] Deleted chat: ${sessionId}`);
+      
+      // Refresh the list immediately after successful deletion
+      await fetchChats();
     } catch (err) {
-      alert("Failed to delete chat");
-      console.error(err);
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.error("[ChatHistory] Delete error:", errorMsg);
+      alert(`Failed to delete chat: ${errorMsg}`);
     } finally {
       setDeletingId(null);
     }

@@ -127,7 +127,16 @@ export interface ChatRequest {
 
 export interface ChatResponse {
   sessionId: string;
-  botMessages: { role: "assistant"; content: string }[];
+  botMessages: {
+    role: "assistant";
+    content: string;
+    confirmationNeeded?: boolean;
+    confirmationOptions?: { id: string; label: string; value: string }[];
+    emailGenerated?: boolean;
+    emailContent?: string;
+    followupQuestions?: string[];
+    requiresContext?: boolean;
+  }[];
   studentInfoRequest?: {
     fields: ["fullName", "studentId", "programme"];
   };
@@ -141,6 +150,11 @@ export interface ChatResponse {
   slotRequest?: {
     slotKeys: string[];
     hints: Record<string, string>;
+  };
+  state?: {
+    selectedTopCategoryKey?: string;
+    phase?: string;
+    messageCount?: number;
   };
   result?: {
     issueKey: string;

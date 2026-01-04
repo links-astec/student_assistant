@@ -7,13 +7,6 @@ import * as problemClassifier from './problemClassificationService';
 import * as emailTemplate from './emailTemplateService';
 import * as contactDirectory from './contactDirectoryService';
 
-// Conditionally import OpenAI
-let openai: any = null;
-if (config.LLM_PROVIDER === 'openai' && config.OPENAI_API_KEY) {
-  import('openai').then((OpenAI) => {
-    openai = new OpenAI.default({ apiKey: config.OPENAI_API_KEY });
-  });
-}
 
 // In-memory conversation store (use Supabase in production)
 const conversations = new Map<string, Conversation>();
@@ -100,33 +93,8 @@ async function generateChatResponse(messages: ChatMessage[], stream: boolean = f
     );
   }
 
-  // Use OpenAI (PAID)
-  if (!openai) {
-    throw new Error('OpenAI client not initialized. Check your API key.');
-  }
-  
-  if (stream) {
-    // OpenAI streaming not implemented yet - return non-streaming for now
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: messages.map(m => ({ role: m.role, content: m.content })),
-      temperature: 0.7,
-      max_tokens: 1000,
-    });
-    
-    return completion.choices[0]?.message?.content || 
-      "I'm sorry, I couldn't generate a response. Please try again.";
-  }
-  
-  const completion = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: messages.map(m => ({ role: m.role, content: m.content })),
-    temperature: 0.7,
-    max_tokens: 1000,
-  });
-  
-  return completion.choices[0]?.message?.content || 
-    "I'm sorry, I couldn't generate a response. Please try again.";
+  // Only Ollama and Llama.cpp are supported
+  throw new Error(`Unsupported LLM provider: ${config.LLM_PROVIDER}. Only 'ollama' and 'llamacpp' are supported.`);
 }
 
 /**
