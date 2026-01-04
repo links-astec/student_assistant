@@ -2,31 +2,31 @@
   "rewrites": [
     {
       "source": "/api/chat/:path*",
-      "destination": "https://backend-sand-alpha-67.vercel.app/api/chat/:path*"
+      "destination": "https://studentassistant-production.up.railway.app/api/chat/:path*"
     },
     {
       "source": "/api/chats/:path*",
-      "destination": "https://backend-sand-alpha-67.vercel.app/api/chats/:path*"
+      "destination": "https://studentassistant-production.up.railway.app/api/chats/:path*"
     },
     {
       "source": "/api/search/:path*",
-      "destination": "https://backend-sand-alpha-67.vercel.app/api/search/:path*"
+      "destination": "https://studentassistant-production.up.railway.app/api/search/:path*"
     },
     {
       "source": "/api/email/:path*",
-      "destination": "https://backend-sand-alpha-67.vercel.app/api/email/:path*"
+      "destination": "https://studentassistant-production.up.railway.app/api/email/:path*"
     },
     {
       "source": "/api/feedback/:path*",
-      "destination": "https://backend-sand-alpha-67.vercel.app/api/feedback/:path*"
+      "destination": "https://studentassistant-production.up.railway.app/api/feedback/:path*"
     },
     {
       "source": "/api/tracking/:path*",
-      "destination": "https://backend-sand-alpha-67.vercel.app/api/tracking/:path*"
+      "destination": "https://studentassistant-production.up.railway.app/api/tracking/:path*"
     },
     {
       "source": "/api/health",
-      "destination": "https://backend-sand-alpha-67.vercel.app/api/health"
+      "destination": "https://studentassistant-production.up.railway.app/api/health"
     },
     {
       "source": "/(.*)",
