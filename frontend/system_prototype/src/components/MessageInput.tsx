@@ -15,6 +15,7 @@ export function MessageInput({
 }: MessageInputProps) {
   const [message, setMessage] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const isSubmittingRef = useRef(false);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -29,9 +30,17 @@ export function MessageInput({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (message.trim() && !disabled) {
+    
+    // Prevent duplicate submissions
+    if (message.trim() && !disabled && !isSubmittingRef.current) {
+      isSubmittingRef.current = true;
       onSend(message.trim());
       setMessage("");
+      
+      // Reset flag after a short delay
+      setTimeout(() => {
+        isSubmittingRef.current = false;
+      }, 1000);
     }
   };
 

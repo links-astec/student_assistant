@@ -60,6 +60,7 @@ function HomeContent() {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [showChatHistory, setShowChatHistory] = useState(false);
   const initialized = useRef(false);
+  const isSubmittingRef = useRef(false);
 
   // Custom fetch with device ID
   const apiFetch = (url: string, options?: RequestInit) => {
@@ -68,10 +69,11 @@ function HomeContent() {
 
   // Handle loading a chat from history
   const handleSelectChat = (selectedSessionId: string) => {
+    console.log("[Chat] Selected chat from history:", selectedSessionId);
     setShowChatHistory(false);
-    // Clear current session first
-    setMessages([]);
-    setSessionId(null);
+    setIsLoading(true);
+    setError(null);
+    // Don't clear messages yet - let loadExistingSession do it
     // Navigate to the session - useEffect will handle loading
     router.push(`/?session=${selectedSessionId}`);
   };
@@ -124,38 +126,42 @@ function HomeContent() {
 
   // Load existing session from URL parameter
   const loadExistingSession = async (existingSessionId: string) => {
+    console.log("[Chat] Starting load for session:", existingSessionId);
     setIsLoading(true);
     setError(null);
 
     try {
-      console.log("[Chat] Loading session:", existingSessionId);
+      console.log("[Chat] Fetching session data...");
       // Fetch the chat state from Supabase via a new API
       const response = await apiFetch(`/api/chats/${existingSessionId}`);
       
       if (!response.ok) {
-        throw new Error("Failed to load chat");
+        throw new Error(`Failed to load chat: ${response.status}`);
       }
 
       const data = await response.json();
-      console.log("[Chat] Session data:", data);
-      console.log("[Chat] Messages from server:", data.state?.messages);
+      console.log("[Chat] Response received:", data);
+      console.log("[Chat] Message count from API:", data.state?.messages?.length || 0);
       
       if (data.success && data.state) {
+        console.log("[Chat] Setting session ID to:", existingSessionId);
         setSessionId(existingSessionId);
         localStorage.setItem("chatSessionId", existingSessionId);
-        console.log("[Chat] Saved session to localStorage");
+        console.log("[Chat] Session ID set and saved to localStorage");
         
         // Restore messages
         if (data.state.messages && data.state.messages.length > 0) {
+          console.log("[Chat] Found", data.state.messages.length, "messages, mapping...");
           const restoredMessages = data.state.messages.map((m: { role: string; content: string }) => ({
             role: m.role as "user" | "assistant",
             content: m.content,
           }));
-          console.log("[Chat] Restoring messages:", restoredMessages);
+          console.log("[Chat] Mapped messages:", restoredMessages);
+          console.log("[Chat] Calling setMessages with", restoredMessages.length, "messages");
           setMessages(restoredMessages);
-          console.log("[Chat] Restored", restoredMessages.length, "messages");
+          console.log("[Chat] setMessages called");
         } else {
-          console.log("[Chat] No messages to restore");
+          console.log("[Chat] No messages found, setting empty array");
           setMessages([]);
         }
 
@@ -333,72 +339,86 @@ function HomeContent() {
 
   const sendMessage = useCallback(
     async (message: string) => {
-      if (isLoading) return;
+      // Prevent duplicate submissions
+      if (isLoading || isSubmittingRef.current) {
+        console.log("[Chat] Ignoring duplicate submission");
+        return;
+      }
 
-      let activeSessionId = sessionId;
+      isSubmittingRef.current = true;
 
-      // If no session exists, create one first
-      if (!activeSessionId) {
-        console.log("[Message] No session exists, creating one first");
+      try {
+        let activeSessionId = sessionId;
+
+        // If no session exists, create one first
+        if (!activeSessionId) {
+          console.log("[Message] No session exists, creating one first");
+          try {
+            const response = await apiFetch("/api/chat", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ actionType: "start" }),
+            });
+
+            if (!response.ok) {
+              throw new Error("Failed to start chat");
+            }
+
+            const data: ChatResponse = await response.json();
+            activeSessionId = data.sessionId;
+            setSessionId(data.sessionId);
+            localStorage.setItem("chatSessionId", data.sessionId);
+            console.log("[Chat] Session created for message:", data.sessionId);
+
+            // Add greeting messages
+            for (const msg of data.botMessages) {
+              setMessages((prev) => [...prev, { role: "assistant", content: msg.content }]);
+            }
+          } catch (err) {
+            setError("Failed to create session. Please refresh.");
+            console.error(err);
+            return;
+          }
+        }
+
+        // User started chatting - hide category cards (free chat mode)
+        setShowCategoryCards(false);
+
+        // Add user message to UI
+        setMessages((prev) => [...prev, { role: "user", content: message }]);
+        setQuickReplies([]);
+        setSlotRequest(null);
+        setIsLoading(true);
+        setError(null);
+
+        // Track session activity
+        trackSession(activeSessionId, selectedCategory);
+
         try {
+          // Call frontend proxy API (not streaming - just JSON)
           const response = await apiFetch("/api/chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ actionType: "start" }),
+            body: JSON.stringify({
+              actionType: "message",
+              sessionId: activeSessionId,
+              userMessage: message,
+            }),
           });
 
-          if (!response.ok) {
-            throw new Error("Failed to start chat");
-          }
+          if (!response.ok) throw new Error("Failed to send message");
 
           const data: ChatResponse = await response.json();
-          activeSessionId = data.sessionId;
-          setSessionId(data.sessionId);
-          localStorage.setItem("chatSessionId", data.sessionId);
-          console.log("[Chat] Session created for message:", data.sessionId);
-
-          // Add greeting messages
-          for (const msg of data.botMessages) {
-            setMessages((prev) => [...prev, { role: "assistant", content: msg.content }]);
-          }
+          handleResponse(data);
         } catch (err) {
-          setError("Failed to create session. Please refresh.");
+          setError("Failed to send message. Please try again.");
           console.error(err);
-          return;
+        } finally {
+          setIsLoading(false);
         }
-      }
-
-      // User started chatting - hide category cards (free chat mode)
-      setShowCategoryCards(false);
-
-      // Add user message to UI
-      setMessages((prev) => [...prev, { role: "user", content: message }]);
-      setQuickReplies([]);
-      setSlotRequest(null);
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        // Call frontend proxy API (not streaming - just JSON)
-        const response = await apiFetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            actionType: "message",
-            sessionId: activeSessionId,
-            userMessage: message,
-          }),
-        });
-
-        if (!response.ok) throw new Error("Failed to send message");
-
-        const data: ChatResponse = await response.json();
-        handleResponse(data);
-      } catch (err) {
-        setError("Failed to send message. Please try again.");
-        console.error(err);
       } finally {
-        setIsLoading(false);
+        // Always reset the submission flag
+        isSubmittingRef.current = false;
       }
     },
     [sessionId, isLoading]

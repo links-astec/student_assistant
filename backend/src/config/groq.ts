@@ -24,7 +24,7 @@ export async function generateGroqChat(
 
   try {
     const response = await groq.chat.completions.create({
-      model: 'mixtral-8x7b-32768', // Free model (very fast)
+      model: 'llama-3.3-70b-versatile', // Free fast model (replaces deprecated mixtral)
       messages: messages.map(m => ({
         role: m.role,
         content: m.content,

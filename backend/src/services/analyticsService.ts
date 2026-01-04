@@ -132,7 +132,7 @@ export async function logMessage(data: MessageData): Promise<string | null> {
     });
 
     if (msgError) {
-      console.error('[Analytics] Error logging message:', msgError.message);
+      // Silently fail analytics - not critical for app functionality
       return messageId;
     }
 
@@ -154,13 +154,13 @@ export async function logMessage(data: MessageData): Promise<string | null> {
           .eq('id', data.sessionId);
       }
     } catch (updateErr) {
-      console.error('[Analytics] Error updating message count:', updateErr);
+      // Silently fail analytics
     }
 
     console.log(`[Analytics] Message logged: ${messageId}`);
     return messageId;
   } catch (err) {
-    console.error('[Analytics] Exception logging message:', err);
+    // Silently fail analytics
     return messageId;
   }
 }
@@ -190,14 +190,14 @@ export async function classifyProblem(
       .eq('id', sessionId);
 
     if (error) {
-      console.error('[Analytics] Error classifying problem:', error.message);
+      // Silently fail - analytics is non-critical
       return false;
     }
 
     console.log(`[Analytics] Problem classified for session ${sessionId}`);
     return true;
   } catch (err) {
-    console.error('[Analytics] Exception classifying problem:', err);
+    // Silently fail analytics
     return false;
   }
 }
@@ -262,14 +262,14 @@ export async function saveEmailTemplate(data: EmailTemplateData): Promise<string
     });
 
     if (error) {
-      console.error('[Analytics] Error saving email template:', error.message);
+      // Silently fail - analytics is non-critical
       return templateId;
     }
 
     console.log(`[Analytics] Email template saved: ${templateId}`);
     return templateId;
   } catch (err) {
-    console.error('[Analytics] Exception saving email template:', err);
+    // Silently fail - analytics is non-critical
     return templateId;
   }
 }

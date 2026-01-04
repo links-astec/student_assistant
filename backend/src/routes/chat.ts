@@ -12,7 +12,7 @@ const chatRequestSchema = z.object({
   userId: z.string().optional(),
   stream: z.boolean().optional().default(false),
   context: z.string().optional(),
-  category: z.string().optional(),
+  category: z.string().nullable().optional(),
 });
 
 /**

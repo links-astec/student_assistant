@@ -388,16 +388,23 @@ export async function POST(request: NextRequest) {
         .map((msg: any) => `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`)
         .join("\n");
 
+      // Build request body, omitting null/undefined values
+      const backendPayload: any = {
+        message: userMessage,
+        conversationId: sessionId,
+        stream: false,
+        context: conversationContext,
+      };
+      
+      // Only add category if it exists
+      if (selectedCategory) {
+        backendPayload.category = selectedCategory;
+      }
+
       const backendResponse = await fetch(`${BACKEND_URL}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: userMessage,
-          conversationId: sessionId,
-          stream: false,
-          context: conversationContext,
-          category: selectedCategory,
-        }),
+        body: JSON.stringify(backendPayload),
       });
 
       if (!backendResponse.ok) {
@@ -449,13 +456,37 @@ export async function POST(request: NextRequest) {
           newState.selectedIssueKey = classification;
         }
 
+        console.log(`[Chat] Saving state for session ${sessionId} with ${updatedMessages.length} messages`);
+
         const { error: updateError } = await supabase
           .from("chat_state")
-          .update({ state_jsonb: newState })
+          .update({ 
+            state_jsonb: newState,
+            updated_at: new Date().toISOString()
+          })
           .eq("session_id", sessionId);
 
         if (updateError) {
           console.error("[Chat] Error saving state:", updateError);
+        } else {
+          console.log(`[Chat] State saved successfully for session ${sessionId}`);
+          console.log(`[Chat] Messages in state:`, newState.messages);
+          
+          // Track session activity in backend (for dashboard/analytics)
+          try {
+            await fetch(`${BACKEND_URL}/api/tracking/session`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sessionId,
+                issueCategory: selectedCategory,
+              }),
+            }).catch(() => {
+              // Silently fail if tracking endpoint is down
+            });
+          } catch (err) {
+            // Ignore tracking errors
+          }
         }
       }
 
