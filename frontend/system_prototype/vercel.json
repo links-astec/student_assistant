@@ -21,11 +21,11 @@
       "destination": "https://studentassistant-production.up.railway.app/api/tracking/:path*"
     },
     {
-      "source": "/api/health",
-      "destination": "https://studentassistant-production.up.railway.app/api/health"
+      "source": "/api/:path*",
+      "destination": "/api/:path*"
     },
     {
-      "source": "/(?!api/).*",
+      "source": "/:path*",
       "destination": "/index.html"
     }
   ],
